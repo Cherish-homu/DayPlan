@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 系统自动备份只覆盖数据库与偏好；大文件与用户自选位置的导出不在其中，
+     完整备份仍以 App 内导出功能为准。 -->
+<full-backup-content>
+    <include domain="database" path="." />
+</full-backup-content>

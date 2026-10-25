@@ -1,0 +1,4 @@
+gradle.projectsEvaluated {
+    def app = gradle.rootProject.project(':app')
+    app.android.sourceSets.test.java.srcDir(new File(app.projectDir.parentFile, 'verification/src'))
+}

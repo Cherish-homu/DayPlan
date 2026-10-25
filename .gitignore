@@ -1,0 +1,42 @@
+# Local builds and IDE settings
+.gradle/
+.kotlin/
+**/build/
+.idea/
+*.iml
+local.properties
+.DS_Store
+
+# Credentials, signatures, local tools and environment
+keystore/
+keystore.properties
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example
+api_key.bin
+tools/
+*.pem
+*.p12
+
+# User data and local investigation materials
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+/backup*/
+restore_snapshots/
+exports/
+delivery/
+project_records/
+release_assets/
+ui_*.xml
+
+# APKs and source distributions belong in Releases
+*.apk
+*.aab
+*.zip
+!gradle/wrapper/gradle-wrapper.jar

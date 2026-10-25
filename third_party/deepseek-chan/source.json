@@ -1,0 +1,28 @@
+{
+  "repository": "https://github.com/YunYueSama/codex-deepseek-pet",
+  "commit": "7661c8b304c5400701f91da01b1a643a207331de",
+  "installed_into_app": false,
+  "modified": false,
+  "files": [
+    {
+      "name": "portrait.png",
+      "bytes": 769600,
+      "sha256": "305AD2D0FA313DF0A3EE16CD72FF4E7A5D89B6253B5A8FCA2D06E40E682A563F"
+    },
+    {
+      "name": "idle-front.png",
+      "bytes": 1516887,
+      "sha256": "79D3952ACFE7620E0C2CFE7B80E9E6793D5F115252962F81CD56778402F4CDCD"
+    },
+    {
+      "name": "LICENSE.txt",
+      "bytes": 2469,
+      "sha256": "A8191AE2C7517F8CB2326D37CD62F84CFD9C2E18CEFE113077897C642DC7912B"
+    },
+    {
+      "name": "ASSET_LICENSE.md",
+      "bytes": 2524,
+      "sha256": "6EC5E61796B95F10EEC94D46EC48C287A708FABDD494241F0D1D6CC64864625C"
+    }
+  ]
+}
