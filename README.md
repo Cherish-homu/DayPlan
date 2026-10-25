@@ -47,6 +47,8 @@ v1.5 在 Windows / Android 14 模拟器环境已验证：
 
 外部探针代码与可移植执行入口见 [verification](verification/README.md)。这些是既有环境的验证结果，其他操作系统/ROM 与后续变更需重新测试。
 
+整理后的独立发布副本已再次构建 Debug APK，并通过 163 项正式测试及 13 项相对路径外部探针，见 [发布前核对](docs/VALIDATION.md)。
+
 ## 来源和许可证
 
 本仓库由本地日序工程整理发布。开发过程使用 GLM、DeepSeek 辅助编码，Codex 辅助需求整理与独立复验；维护和发布由 [Cherish-homu](https://github.com/Cherish-homu) 负责。
