@@ -83,6 +83,8 @@ class AiViewModel @JvmOverloads constructor(
     val pdfPages = MutableStateFlow<Map<String, Set<Int>>>(emptyMap())
     val xlsxSheets = MutableStateFlow<Map<String, String>>(emptyMap())
     val sendState = MutableStateFlow<SendState>(SendState.Idle)
+    /** 最近一次真实本地写入成功的数量；仅用于角色“已保存N项”反馈，不参与业务判断。 */
+    val lastSavedNotice = MutableStateFlow<Int?>(null)
     val configVersion = MutableStateFlow(0) // 设置变化后自增，驱动界面刷新
 
     private var sendJob: Job? = null
@@ -303,6 +305,7 @@ class AiViewModel @JvmOverloads constructor(
 
     fun send() {
         if (sending) return
+        lastSavedNotice.value = null
         val text = input.value.trim()
         val atts = attachments.value
         if (text.isEmpty() && atts.isEmpty()) return
@@ -419,6 +422,9 @@ class AiViewModel @JvmOverloads constructor(
                 val outcome = ai.executor.applySelected(batchId, selected)
                 if (outcome is ApplyOutcome.Success) ai.controller.markBatchApplied(batchId)
                 withContext(Dispatchers.Main) {
+                    if (outcome is ApplyOutcome.Success) {
+                        lastSavedNotice.value = outcome.batch.applied?.items?.size ?: 0
+                    }
                     onDone(outcome)
                     reload()
                     app0.refreshWidgets()
@@ -469,6 +475,7 @@ class AiViewModel @JvmOverloads constructor(
                 xlsxSheets.value = emptyMap()
                 contextAttachments.value = emptyList()
                 appliedRecords.value = emptyMap()
+                lastSavedNotice.value = null
                 reload()
             }
         }

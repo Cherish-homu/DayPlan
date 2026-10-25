@@ -16,6 +16,8 @@ data class AiConfig(
     val planWindowStart: String = "08:00",
     val planWindowEnd: String = "22:00",
     val showWhale: Boolean = true,
+    /** 角色动效：system / reduced / full；默认跟随系统。 */
+    val animationMode: String = "system",
     val noticeAcknowledged: Boolean = false,
 ) {
     companion object {
@@ -48,6 +50,7 @@ class AiSettingsStore(context: Context) {
             planWindowStart = prefs.getString("winStart", "08:00") ?: "08:00",
             planWindowEnd = prefs.getString("winEnd", "22:00") ?: "22:00",
             showWhale = prefs.getBoolean("showWhale", true),
+            animationMode = prefs.getString("animationMode", "system") ?: "system",
             noticeAcknowledged = prefs.getBoolean("noticeAck", false),
         )
         set(value) {
@@ -60,6 +63,7 @@ class AiSettingsStore(context: Context) {
                 .putString("winStart", value.planWindowStart)
                 .putString("winEnd", value.planWindowEnd)
                 .putBoolean("showWhale", value.showWhale)
+                .putString("animationMode", value.animationMode)
                 .putBoolean("noticeAck", value.noticeAcknowledged)
                 .apply()
         }

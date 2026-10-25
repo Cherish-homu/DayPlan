@@ -120,7 +120,7 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:gravity="center"
-        android:text="今天暂无安排，点右上角 + 新增"
+        android:text="今天没有日程或到期待办，点右上角 + 新增"
         android:textColor="@color/widget_text_secondary"
         android:textSize="12sp"
         android:visibility="gone" />

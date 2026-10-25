@@ -1,8 +1,8 @@
 {
   "repository": "https://github.com/YunYueSama/codex-deepseek-pet",
   "commit": "7661c8b304c5400701f91da01b1a643a207331de",
-  "installed_into_app": false,
-  "modified": false,
+  "installed_into_app": true,
+  "modified": true,
   "files": [
     {
       "name": "portrait.png",

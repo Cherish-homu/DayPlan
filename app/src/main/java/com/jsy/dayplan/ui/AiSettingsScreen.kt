@@ -21,6 +21,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -87,7 +90,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                         Column(Modifier.weight(1f)) {
                             Text("启用 AI 助手", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "关闭后右下角入口与聊天页只提示去设置，离线功能照常。",
+                                "关闭后底部助手入口与聊天页只提示去设置，离线功能照常。",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -285,9 +288,10 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                     Text("入口显示", style = MaterialTheme.typography.titleMedium)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("显示右下角 DeepSeek 娘入口", fontSize = 13.sp)
+                            Text("显示 DeepSeek 娘助手", fontSize = 13.sp)
                             Text(
-                                "展开约 80×120dp、收起约 60dp；长按头像可暂时隐藏，在此恢复。",
+                                "默认约 48dp 头像，点开可展开全身（约 72×104dp）；" +
+                                    "长按隐藏，可在此恢复。",
                                 fontSize = 10.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -297,6 +301,22 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                             onCheckedChange = { update(cfg.copy(showWhale = it)) },
                         )
                     }
+                    Text("角色动画", fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+                    val animationMode = ChanAnimationMode.fromKey(cfg.animationMode)
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        ChanAnimationMode.entries.forEachIndexed { i, mode ->
+                            SegmentedButton(
+                                selected = animationMode == mode,
+                                onClick = { update(cfg.copy(animationMode = mode.key)) },
+                                shape = SegmentedButtonDefaults.itemShape(i, ChanAnimationMode.entries.size),
+                            ) { Text(mode.label, maxLines = 1, softWrap = false) }
+                        }
+                    }
+                    Text(
+                        animationMode.description + "；减少动画时仍保留文字和状态。",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -344,8 +364,9 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("第三方素材", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "聊天入口头像使用社区二创 Q 版“DeepSeek 娘”：YunYueSama / codex-deepseek-pet" +
-                            "（commit 7661c8b），采用“大肥鱼项目署名许可 1.0”，非 DeepSeek 官方形象。",
+                        "助手使用社区二创 Q 版“DeepSeek 娘”：YunYueSama / codex-deepseek-pet" +
+                            "（commit 7661c8b），采用“大肥鱼项目署名许可 1.0”，非 DeepSeek 官方形象。" +
+                            "已做切帧、共同包围盒裁切、缩放与动效适配。",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -354,7 +375,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
             }
 
             Text(
-                "日序 v1.5 · AI 为可选功能，需自备 Key；离线功能不依赖网络",
+                "日序 v1.7.1 · AI 为可选功能，需自备 Key；离线功能不依赖网络",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -377,23 +398,6 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
     }
 
     if (showLicense) {
-        AlertDialog(
-            onDismissRequest = { showLicense = false },
-            title = { Text("DeepSeek 娘素材许可") },
-            text = {
-                Text(
-                    "素材：codex-deepseek-pet 的 assets/whale 成品立绘（portrait.png / idle-front.png）。\n" +
-                        "作者：YunYueSama\n" +
-                        "来源：https://github.com/YunYueSama/codex-deepseek-pet\n" +
-                        "commit：7661c8b304c5400701f91da01b1a643a207331de\n" +
-                        "许可：大肥鱼项目署名许可 1.0（非 MIT）。\n\n" +
-                        "本应用仅使用成品立绘，未搬运参考图、字体、Electron 程序或桌宠插件代码；" +
-                        "为入口尺寸做了裁剪与缩放（修改），并打包为本地图片，显示时不联网。\n" +
-                        "该形象为社区二创，非 DeepSeek 官方产品形象；个人自用，不据此推断底层第三方设计均获商用授权。",
-                    fontSize = 11.sp,
-                )
-            },
-            confirmButton = { TextButton(onClick = { showLicense = false }) { Text("知道了") } },
-        )
+        ChanAssetLicenseDialog { showLicense = false }
     }
 }

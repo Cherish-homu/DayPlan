@@ -4,6 +4,7 @@ import com.jsy.dayplan.data.CountdownEntity
 import com.jsy.dayplan.data.ScheduleEntity
 import com.jsy.dayplan.data.TodoEntity
 import java.time.LocalDate
+import java.time.LocalTime
 
 /**
  * 首页与「今日安排」小组件共用的口径：今日日程、待办分组与排序。
@@ -23,6 +24,59 @@ object TodayLogic {
         s.id, s.title, LocalDate.parse(s.startDate), LocalDate.parse(s.endDate),
         s.allDay, s.startTime, s.endTime,
     )
+
+    /** “接下来”区域：优先正在进行的定时日程，其次下一段；全天日程仅作兜底。 */
+    data class FocusSchedule(
+        val schedule: ScheduleEntity,
+        val ongoing: Boolean,
+        val startMinute: Int,
+        val endMinute: Int,
+    )
+
+    fun focusSchedule(
+        schedules: List<ScheduleEntity>,
+        today: LocalDate,
+        now: LocalTime,
+    ): FocusSchedule? {
+        val nowMin = now.hour * 60 + now.minute
+        val todaySchedules = schedulesForToday(schedules, today)
+        val timed = todaySchedules.filter { !it.allDay }
+            .mapNotNull { s ->
+                val start = if (LocalDate.parse(s.startDate).isBefore(today)) 0
+                else ScheduleLogic.toMinutes(s.startTime ?: "00:00") ?: 0
+                val end = if (LocalDate.parse(s.endDate).isAfter(today)) 24 * 60
+                else ScheduleLogic.toMinutes(s.endTime ?: "24:00") ?: 24 * 60
+                if (end <= start) null else FocusSchedule(s, nowMin in start until end, start, end)
+            }
+        val ongoing = timed.filter { it.ongoing }.minByOrNull { it.endMinute }
+        if (ongoing != null) return ongoing
+        val next = timed.filter { it.startMinute > nowMin }.minByOrNull { it.startMinute }
+        if (next != null) return next
+        val allDay = todaySchedules.firstOrNull { it.allDay } ?: return null
+        return FocusSchedule(allDay, true, 0, 24 * 60)
+    }
+
+    /** 日程行时间说明：跨天时仍保留今天可见的时刻；只有恰好次日才写“明天”。 */
+    fun scheduleTimeText(s: ScheduleEntity, today: LocalDate): String {
+        if (s.allDay) {
+            return if (s.startDate == s.endDate) "全天" else "全天 · 多日"
+        }
+        val startDate = LocalDate.parse(s.startDate)
+        val endDate = LocalDate.parse(s.endDate)
+        val start = s.startTime ?: ""
+        val end = s.endTime ?: ""
+        val startsBefore = startDate.isBefore(today)
+        val endsAfter = endDate.isAfter(today)
+        val endDay = if (endDate == today.plusDays(1)) "明天"
+        else "${endDate.monthValue}月${endDate.dayOfMonth}日"
+        val startDay = "${startDate.monthValue}月${startDate.dayOfMonth}日"
+        return when {
+            startsBefore && endsAfter -> "今天全天 · 至 $endDay"
+            startsBefore -> "至 $end · ${startDay}起"
+            endsAfter -> "$start 起 · ${endDay}结束"
+            else -> "$start–$end"
+        }
+    }
 
     /** 今天覆盖的全部日程，按时间流排序（全天在前）。 */
     fun schedulesForToday(schedules: List<ScheduleEntity>, today: LocalDate): List<ScheduleEntity> {

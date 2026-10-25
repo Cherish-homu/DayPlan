@@ -10,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -19,21 +20,36 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.jsy.dayplan.vm.AiViewModel
 import com.jsy.dayplan.vm.PlanViewModel
 import com.jsy.dayplan.vm.RestoreOutcome
@@ -53,8 +69,55 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
     // AI 入口状态：配置变化（启用/入口显示）与发送中状态驱动重绘
     val aiConfigVersion by aiVm.configVersion.collectAsState()
     val aiConfig = remember(aiConfigVersion) { aiVm.config() }
-    val aiSending = aiVm.sendState.collectAsState().value is com.jsy.dayplan.vm.SendState.Sending
-    var chanExpanded by remember { mutableStateOf(true) }
+    val sendState by aiVm.sendState.collectAsState()
+    val batches by aiVm.batches.collectAsState()
+    val savedNotice by aiVm.lastSavedNotice.collectAsState()
+    var chanExpanded by remember { mutableStateOf(false) }
+    var hasAppeared by remember { mutableStateOf(false) }
+    var wasVisible by remember { mutableStateOf(aiConfig.showWhale) }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val animationMode = remember(aiConfigVersion) {
+        ChanAnimationMode.fromKey(aiConfig.animationMode)
+    }
+    val reduceMotion = rememberReduceMotion(animationMode)
+
+    LaunchedEffect(savedNotice) {
+        if (savedNotice != null) {
+            delay(3500)
+            aiVm.lastSavedNotice.value = null
+        }
+    }
+    LaunchedEffect(aiConfig.showWhale) {
+        if (aiConfig.showWhale && !wasVisible) hasAppeared = false
+        wasVisible = aiConfig.showWhale
+    }
+    // 展开只是临时查看；切页后回到紧凑态，避免每次刷新留下大块立绘。
+    LaunchedEffect(current) {
+        if (chanExpanded) chanExpanded = false
+    }
+    LaunchedEffect(chanExpanded) {
+        if (chanExpanded) {
+            delay(12_000)
+            chanExpanded = false
+        }
+    }
+
+    fun hideAssistant() {
+        aiVm.saveConfig(aiVm.config().copy(showWhale = false))
+        hasAppeared = false
+        scope.launch {
+            val result = snackbar.showSnackbar(
+                message = "已隐藏助手",
+                actionLabel = "撤销",
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                aiVm.saveConfig(aiVm.config().copy(showWhale = true))
+                hasAppeared = false
+            }
+        }
+    }
 
     fun showRestoreOutcome(outcome: RestoreOutcome) {
         vm.refreshSnapshots()
@@ -156,31 +219,19 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
         )
     }
 
-    // 小组件“+ 新增”：应用内新增选择（不是只打开首页）
+    // 小组件“+ 新增”：应用内新增选择，与首页/月历使用同一类型面板
     val showAddChooser by vm.showAddChooser.collectAsState()
     if (showAddChooser) {
-        AlertDialog(
-            onDismissRequest = { vm.showAddChooser.value = false },
-            title = { Text("新增") },
-            text = {
-                androidx.compose.foundation.layout.Column {
-                    Text("选择要新增的类型")
-                    TextButton(onClick = {
-                        vm.showAddChooser.value = false
-                        vm.push(Screen.EditTodo(-1))
-                    }) { Text("待办") }
-                    TextButton(onClick = {
-                        vm.showAddChooser.value = false
-                        vm.push(Screen.EditSchedule(-1, LocalDate.now().toString()))
-                    }) { Text("日程") }
-                    TextButton(onClick = {
-                        vm.showAddChooser.value = false
-                        vm.push(Screen.EditCountdown(-1))
-                    }) { Text("倒数日") }
+        AddItemSheet(
+            contextLabel = "为今天新建",
+            onDismiss = { vm.showAddChooser.value = false },
+            onSelect = { type ->
+                vm.showAddChooser.value = false
+                when (type) {
+                    PlanItemType.SCHEDULE -> vm.push(Screen.EditSchedule(-1, LocalDate.now().toString()))
+                    PlanItemType.TODO -> vm.push(Screen.EditTodo(-1))
+                    PlanItemType.COUNTDOWN -> vm.push(Screen.EditCountdown(-1))
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { vm.showAddChooser.value = false }) { Text("取消") }
             },
         )
     }
@@ -199,12 +250,28 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
 
     BackHandler(enabled = stack.size > 1) { vm.pop() }
 
+    val mainTab = current in setOf(
+        Screen.Today, Screen.Calendar, Screen.Countdowns, Screen.Settings,
+    )
+    val chanStatus = ChanStatusLogic.from(
+        sendState,
+        pendingCount = batches.sumOf { it.record.actions.size },
+        lastSaved = savedNotice,
+    )
+
     Scaffold(
-        bottomBar = {
-            if (current in setOf(
-                    Screen.Today, Screen.Calendar, Screen.Countdowns, Screen.Settings,
+        snackbarHost = {
+            SnackbarHost(snackbar) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    actionColor = MaterialTheme.colorScheme.primary,
                 )
-            ) {
+            }
+        },
+        bottomBar = {
+            if (mainTab) {
                 NavigationBar {
                     NavigationBarItem(
                         selected = current == Screen.Today,
@@ -245,6 +312,14 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
                     themeMode = themeMode,
                     onThemeChange = { vm.setThemeMode(it) },
                     onOpenAiSettings = { vm.push(Screen.AiSettings) },
+                    animationMode = animationMode,
+                    onAnimationModeChange = {
+                        aiVm.saveConfig(aiVm.config().copy(animationMode = it.key))
+                    },
+                    assistantVisible = aiConfig.showWhale,
+                    onAssistantVisibilityChange = {
+                        aiVm.saveConfig(aiVm.config().copy(showWhale = it))
+                    },
                     snapshotCount = snapshotCount,
                     reminderStatus = reminderStatus,
                     onExportJson = { createJson.launch("日序备份_${LocalDate.now()}.json") },
@@ -282,11 +357,12 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
                     },
                 )
                 is Screen.EditSchedule -> EditScheduleScreen(vm, current.id, current.presetDate)
-                is Screen.EditTodo -> EditTodoScreen(vm, current.id)
-                is Screen.EditCountdown -> EditCountdownScreen(vm, current.id)
+                is Screen.EditTodo -> EditTodoScreen(vm, current.id, current.presetDate)
+                is Screen.EditCountdown -> EditCountdownScreen(vm, current.id, current.presetDate)
                 Screen.Focus -> FocusScreen(vm)
                 Screen.AiChat -> AiChatScreen(
                     aiVm,
+                    reduceMotion = reduceMotion,
                     onBack = { vm.pop() },
                     onOpenSettings = { vm.push(Screen.AiSettings) },
                     onOpenEntity = { kind, id ->
@@ -301,24 +377,58 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
                 Screen.AiSettings -> AiSettingsScreen(aiVm, onBack = { vm.pop() })
             }
 
-            // DeepSeek 娘入口：仅四个主页面显示；避开底部 FAB 与导航栏
-            val mainTab = current in setOf(
-                Screen.Today, Screen.Calendar, Screen.Countdowns, Screen.Settings,
-            )
+            // 只保留右侧小模块悬浮；不占整行底栏，也不影响左侧内容。
             if (mainTab && aiConfig.showWhale) {
-                ChanEntryFab(
+                ChanEntryBar(
                     expanded = chanExpanded,
-                    thinking = aiSending,
+                    status = chanStatus,
+                    reduceMotion = reduceMotion,
+                    playAppear = !hasAppeared,
+                    onAppearFinished = { hasAppeared = true },
                     onToggleExpanded = { chanExpanded = !chanExpanded },
                     onClick = { vm.push(Screen.AiChat) },
-                    onHide = {
-                        aiVm.saveConfig(aiVm.config().copy(showWhale = false))
-                    },
+                    onHide = { hideAssistant() },
+                    onRetry = { aiVm.send() },
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = 88.dp),
+                        .padding(
+                            end = 12.dp,
+                            bottom = if (current == Screen.Countdowns) 84.dp else 8.dp,
+                        ),
+                )
+            }
+
+        }
+    }
+}
+
+
+/** 系统动画关闭（0）或用户选择“减少”时不跑循环动效；恢复时重新读取系统值。 */
+@Composable
+private fun rememberReduceMotion(mode: ChanAnimationMode): Boolean {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var systemScale by remember {
+        mutableFloatStateOf(
+            Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ),
+        )
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                systemScale = Settings.Global.getFloat(
+                    context.contentResolver,
+                    Settings.Global.ANIMATOR_DURATION_SCALE,
+                    1f,
                 )
             }
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    return ChanMotion.shouldReduce(mode, systemScale)
 }

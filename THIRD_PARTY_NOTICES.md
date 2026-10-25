@@ -9,9 +9,9 @@
 | 作者 | **YunYueSama** |
 | GitHub | **https://github.com/YunYueSama/codex-deepseek-pet** |
 | 固定提交 | `7661c8b304c5400701f91da01b1a643a207331de` |
-| 原图 | `assets/whale/portrait.png` |
-| 本项目文件 | `chan_portrait.png` / `chan_head.png`，位于 `app/src/main/res/drawable-nodpi/` |
-| 修改 | 裁剪、缩放适配全身入口与圆形头像；保留透明背景；未重绘或改色 |
+| 原图 | `assets/whale/portrait.png`；`assets/whale/idle-front.png`（睁眼/闭眼两帧图集） |
+| 本项目文件 | `chan_portrait.png`、`chan_head.png`、`chan_idle_open.png`、`chan_idle_blink.png`、`chan_head_open.png`、`chan_head_blink.png`，位于 `app/src/main/res/drawable-nodpi/` |
+| 修改 | 从 `idle-front.png` 左右两帧切出睁眼/闭眼帧；按共同包围盒裁切并缩放为 256×350 全身与 192×192 头像；适配呼吸、眨眼、出现、收起/展开与状态动效；保留透明背景；未重绘或改色 |
 | 许可 | 自定义“大肥鱼项目署名许可 1.0”，**不是 MIT** |
 
 完整许可及上游第三方参考边界见 [third_party/deepseek-chan](third_party/deepseek-chan/README.md)。这套图为社区二创，不是 DeepSeek 官方形象或授权声明。

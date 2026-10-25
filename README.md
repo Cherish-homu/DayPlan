@@ -2,9 +2,9 @@
 
 <img src="app/src/main/res/drawable-nodpi/chan_portrait.png" alt="社区二创 DeepSeek 娘，作者 YunYueSama" width="120" align="right" />
 
-一个蓝白主题的 Android 日程、待办、倒数日与专注计时 App。数据保存在本机，可选接入用户自己的 DeepSeek API，通过聊天、图片和文档生成可核对的计划，再一键导入。
+一个马卡龙蓝紫日记手帐风格的 Android 日程、待办、倒数日与专注计时 App。数据保存在本机，可选接入用户自己的 DeepSeek API，通过聊天、图片和文档生成可核对的计划，再一键导入。
 
-当前发布版 **v1.5 / versionCode 6**，包名 `com.jsy.dayplan`，最低 Android 8.0（API 26）。
+当前发布版 **v1.7.1 / versionCode 10**，包名 `com.jsy.dayplan`，最低 Android 8.0（API 26）。
 
 [下载安装](https://github.com/Cherish-homu/DayPlan/releases) · [使用说明](docs/使用说明.md) · [构建与测试](docs/BUILDING.md) · [来源与致谢](THIRD_PARTY_NOTICES.md)
 
@@ -12,7 +12,7 @@
 
 - 今天、月历、倒数日、我的四页；日程、待办、重要日子及本地提醒。
 - 专注倒计时；今日安排与倒数日桌面小组件。
-- 蓝白/深色主题；本地 JSON 备份、恢复前快照与回退。
+- 马卡龙蓝紫/浅色/深色主题；本地 JSON 备份、恢复前快照与回退。
 - App 内 DeepSeek 娘聊天入口，用户自行配置 API Key。
 - 文字、JPG/PNG/WebP、PDF、DOCX、XLSX、TXT/Markdown、CSV 联合整理安排；文档先在手机本地提取内容，扫描 PDF 按页转图片。
 - 计划先预览，可勾选和编辑、检查来源与冲突、批量导入及撤销。附件批次始终先确认；可选自动保存明确且无冲突的纯文字新增。
@@ -36,28 +36,26 @@ Kotlin 2.0.20、Jetpack Compose / Material 3、Room 2.6.1、Coroutines/Serializa
 
 Windows 使用 `gradlew.bat`。SDK 路径按本机设置，首次构建需要下载依赖，详见 [BUILDING.md](docs/BUILDING.md)。
 
-v1.5 在 Windows / Android 14 模拟器环境已验证：
+v1.7.1 在 Windows / Android 14 模拟器环境已验证：
 
 | 验证 | 结果 |
 |---|---|
-| 正式单元与 Robolectric / Room 测试 | 163/163 |
-| 外部独立反例（恢复、去重、并发、附件、自动保存、提醒等） | 13/13 |
-| 同签名升级、导入/撤销、快照回退后旧计划失效 | 模拟器通过 |
+| 正式单元与 Robolectric / Room 测试 | 185/185 |
+| 同签名覆盖升级、旧数据/快照保留 | 模拟器通过 |
+| 360/411dp × 字号 1.0/1.3 × 浅/深色；月历筛选/日期继承；助手三状态 | 模拟器通过 |
 | 真实模型识别、实体手机、真实拔电 | 未验证 |
 
-外部探针代码与可移植执行入口见 [verification](verification/README.md)。这些是既有环境的验证结果，其他操作系统/ROM 与后续变更需重新测试。
-
-整理后的独立发布副本已再次构建 Debug APK，并通过 163 项正式测试及 13 项相对路径外部探针，见 [发布前核对](docs/VALIDATION.md)。
+v1.5 时代的外部探针代码与可移植执行入口仍保留在 [verification](verification/README.md)；本轮没有重跑这些探针。当前源码对应 v1.7.1，验证摘要见 [发布前核对](docs/VALIDATION.md)。
 
 ## 来源和许可证
 
 本仓库由本地日序工程整理发布。开发过程使用 GLM、DeepSeek 辅助编码，Codex 辅助需求整理与独立复验；维护和发布由 [Cherish-homu](https://github.com/Cherish-homu) 负责。
 
-**右下角角色素材不是本项目原创，也不是 DeepSeek 官方授权形象：**
+**右侧悬浮助手角色素材不是本项目原创，也不是 DeepSeek 官方授权形象：**
 
 - 作者：[YunYueSama](https://github.com/YunYueSama)。
 - 原仓库：[codex-deepseek-pet](https://github.com/YunYueSama/codex-deepseek-pet)，固定 commit `7661c8b304c5400701f91da01b1a643a207331de`。
-- 采用 `assets/whale/portrait.png`，裁剪、缩放为全身入口与头部头像；未改色、未重新绘制。
+- 采用 `assets/whale/portrait.png` 与 `idle-front.png`；从 idle-front 左右两帧切出睁眼/闭眼，按共同包围盒裁切、缩放，并适配呼吸/眨眼/出现/收起展开动效；未改色、未重新绘制角色。
 - 素材遵守自定义“大肥鱼项目署名许可 1.0”，**不随主代码改成 MIT**；完整条款和第三方参考边界见 [third_party/deepseek-chan](third_party/deepseek-chan/README.md)。
 - 本 App 没有移植原仓库的 Windows 桌宠程序、Electron/Node.js、物理/喂食系统、参考原图或字体，也不需要电脑端运行。
 

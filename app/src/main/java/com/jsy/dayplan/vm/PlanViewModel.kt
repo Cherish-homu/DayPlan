@@ -46,8 +46,8 @@ sealed class Screen(val route: String) {
     data object AiChat : Screen("aiChat")
     data object AiSettings : Screen("aiSettings")
     data class EditSchedule(val id: Long, val presetDate: String?) : Screen("editSched")
-    data class EditTodo(val id: Long) : Screen("editTodo")
-    data class EditCountdown(val id: Long) : Screen("editCd")
+    data class EditTodo(val id: Long, val presetDate: String? = null) : Screen("editTodo")
+    data class EditCountdown(val id: Long, val presetDate: String? = null) : Screen("editCd")
 }
 
 /** 恢复结果分阶段：数据是否已替换、提醒是否已重建，界面不能混为一谈。 */

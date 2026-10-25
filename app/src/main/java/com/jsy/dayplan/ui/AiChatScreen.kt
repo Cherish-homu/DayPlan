@@ -92,6 +92,7 @@ fun AiChatScreen(
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenEntity: (kind: String, id: Long) -> Unit = { _, _ -> },
+    reduceMotion: Boolean = false,
 ) {
     val context = LocalContext.current
     val entries by vm.entries.collectAsState()
@@ -105,6 +106,7 @@ fun AiChatScreen(
     val xlsxSheets by vm.xlsxSheets.collectAsState()
     val sendState by vm.sendState.collectAsState()
     val configVersion by vm.configVersion.collectAsState()
+    val savedNotice by vm.lastSavedNotice.collectAsState()
     val listState = rememberLazyListState()
 
     var showClearConfirm by remember { mutableStateOf(false) }
@@ -133,22 +135,47 @@ fun AiChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text("AI 助手")
-                        Text(
-                            when {
-                                vm.isMockActive() -> "演示(Mock)模式 · 未连接真实服务"
-                                readiness == com.jsy.dayplan.ai.ChatController.Readiness.NO_KEY ->
-                                    "未配置 API Key"
+                    val chanStatus = ChanStatusLogic.from(
+                        sendState,
+                        pendingCount = batches.sumOf { it.record.actions.size },
+                        lastSaved = savedNotice,
+                    )
+                    val statusLine = when {
+                        chanStatus.mood != ChanMood.IDLE -> statusText(chanStatus)
+                        vm.isMockActive() -> "演示(Mock)模式 · 未连接真实服务"
+                        readiness == com.jsy.dayplan.ai.ChatController.Readiness.NO_KEY ->
+                            "未配置 API Key"
 
-                                readiness == com.jsy.dayplan.ai.ChatController.Readiness.DISABLED ->
-                                    "助手未启用"
+                        readiness == com.jsy.dayplan.ai.ChatController.Readiness.DISABLED ->
+                            "助手未启用"
 
-                                else -> "模型：${vm.config().model}"
-                            },
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        else -> "模型：${vm.config().model}"
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ChanAvatar(
+                            size = 32.dp,
+                            animate = !reduceMotion,
+                            contentDescription = null,
                         )
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("AI 助手")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    statusLine,
+                                    fontSize = 11.sp,
+                                    color = if (chanStatus.mood == ChanMood.ERROR)
+                                        MaterialTheme.colorScheme.error
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
+                                if (chanStatus.mood == ChanMood.THINKING) {
+                                    Spacer(Modifier.width(4.dp))
+                                    ThinkingDots(animate = !reduceMotion)
+                                }
+                            }
+                        }
                     }
                 },
                 navigationIcon = {
@@ -366,11 +393,7 @@ private fun WelcomeCard(vm: AiViewModel, onExample: (String) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Image(
-                    painter = painterResource(R.drawable.chan_head),
-                    contentDescription = null,
-                    modifier = Modifier.size(36.dp).clip(CircleShape),
-                )
+                ChanAvatar(size = 36.dp, animate = false, contentDescription = null)
                 Column {
                     Text("你好，我是日序 AI 助手", style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -407,11 +430,7 @@ private fun MessageBubble(e: ChatEntry) {
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         if (!isUser) {
-            Image(
-                painter = painterResource(R.drawable.chan_head),
-                contentDescription = null,
-                modifier = Modifier.size(32.dp).clip(CircleShape),
-            )
+            ChanAvatar(size = 32.dp, animate = false, contentDescription = null)
             Spacer(Modifier.width(6.dp))
         }
         Surface(
@@ -1185,17 +1204,11 @@ private fun ActionEditDialog(
     var error by remember { mutableStateOf<String?>(null) }
 
     fun validate(): Boolean {
-        if (title.isBlank()) { error = "标题不能为空"; return false }
-        if (d1.isBlank() || runCatching { java.time.LocalDate.parse(d1) }.isFailure) {
-            error = "日期需为 yyyy-MM-dd"; return false
-        }
-        if (t1.isNotBlank() && com.jsy.dayplan.core.PlanRules.normalizeTime(t1) == null) {
-            error = "时间需为 HH:mm"; return false
-        }
-        if (t2.isNotBlank() && com.jsy.dayplan.core.PlanRules.normalizeTime(t2) == null) {
-            error = "时间需为 HH:mm"; return false
-        }
-        return true
+        val problem = com.jsy.dayplan.ai.AiDraftEditRules.validate(
+            action.op, title, d1, t1, t2,
+        )
+        error = problem
+        return problem == null
     }
 
     AlertDialog(
@@ -1223,7 +1236,14 @@ private fun ActionEditDialog(
                     OutlinedTextField(value = location, onValueChange = { location = it }, label = { Text("地点") })
                 }
                 if (action.op == "create_todo" || action.op == "update_todo") {
-                    OutlinedTextField(value = t1, onValueChange = { t1 = it }, label = { Text("截止时间 HH:mm（可清空）") })
+                    OutlinedTextField(
+                        value = t1,
+                        onValueChange = { t1 = it },
+                        label = { Text("截止时间 HH:mm（可清空）") },
+                        supportingText = {
+                            if (d1.isBlank()) Text("截止日期留空时，将保存为未定日期")
+                        },
+                    )
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
                 Text(
@@ -1247,7 +1267,9 @@ private fun ActionEditDialog(
                                 t2.trim().takeIf { it.isNotBlank() }
                             } else action.endTime,
                             dueDate = if (action.op.endsWith("todo")) d1.trim().ifBlank { null } else action.dueDate,
-                            dueTime = if (action.op.endsWith("todo")) t1.trim().ifBlank { null } else action.dueTime,
+                            dueTime = if (action.op.endsWith("todo")) {
+                                if (d1.isBlank()) null else t1.trim().ifBlank { null }
+                            } else action.dueTime,
                             targetDate = if (action.op.endsWith("countdown")) d1.trim() else action.targetDate,
                             location = location.trim(),
                         ),
