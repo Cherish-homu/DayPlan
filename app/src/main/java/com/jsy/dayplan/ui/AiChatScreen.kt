@@ -134,8 +134,8 @@ fun AiChatScreen(
     ) { uri -> vm.addAttachment(uri, null) }
 
     LaunchedEffect(Unit) {
-        // 单一聊天：不再提供模式切换，进入即固定为纯文字聊天。
-        if (vm.chatMode() != AiConfig.MODE_PLAIN) vm.setChatMode(AiConfig.MODE_PLAIN)
+        // One entry point: natural conversation and locally reviewed, explicitly confirmed drafts.
+        if (vm.chatMode() != AiConfig.MODE_ASSISTANT) vm.setChatMode(AiConfig.MODE_ASSISTANT)
         // 进入聊天页时从 DB 边界/批次事实重载：恢复/快照回退后旧草稿立即显示失效
         vm.reload()
     }
@@ -170,9 +170,9 @@ fun AiChatScreen(
                         lastSaved = savedNotice,
                     )
                     val statusLine = when {
+                        vm.isMockActive() -> "演示(Mock)模式 · 未连接真实服务"
                         sendState is SendState.Sending -> "正在回复…"
                         chanStatus.mood != ChanMood.IDLE -> statusText(chanStatus)
-                        vm.isMockActive() -> "演示(Mock)模式 · 未连接真实服务"
                         readiness == com.jsy.dayplan.ai.ChatController.Readiness.NO_KEY ->
                             "未配置 API Key"
 
@@ -268,7 +268,17 @@ fun AiChatScreen(
                     }
                 }
                 items(entries, key = { "${it.atEpochMs}-${it.text.hashCode()}-${it.role}" }) { e ->
-                    MessageBubble(e)
+                    when (e.kind) {
+                        "plan" -> PendingBatchCard(vm, e.batchId.orEmpty(), { editAction = it }, onOpenEntity,
+                            busy = sendState is SendState.Sending || e.batchId in busyIds)
+                        "result" -> AppliedBatchCard(vm, e.batchId.orEmpty(), onOpenEntity,
+                            busy = sendState is SendState.Sending || e.batchId in busyIds)
+                        else -> MessageBubble(e)
+                    }
+                }
+                items(batches.filter { b -> entries.none { it.batchId == b.record.batchId } }, key = { it.record.batchId }) { b ->
+                    PendingBatchCard(vm, b.record.batchId, { editAction = it }, onOpenEntity,
+                        busy = sendState is SendState.Sending || b.record.batchId in busyIds)
                 }
                 if (sendState is SendState.Sending && streamingReply.isNotBlank()) {
                     item(key = "streaming-reply") {
@@ -316,7 +326,7 @@ fun AiChatScreen(
                             modifier = Modifier.weight(1f),
                         )
                         if (s.retryable) {
-                            TextButton(onClick = { vm.send() }) { Text("重试") }
+                            TextButton(onClick = { vm.retryLastSend() }) { Text("重试") }
                         }
                         TextButton(onClick = {
                             vm.sendState.value = SendState.Idle
@@ -335,7 +345,7 @@ fun AiChatScreen(
                 meta = attachmentMeta,
                 pdfPages = pdfPages,
                 xlsxSheets = xlsxSheets,
-                plainMode = chatMode == AiConfig.MODE_PLAIN,
+                plainMode = true,
                 sending = sendState is SendState.Sending,
                 onPickImage = {
                     pickImage.launch(
@@ -408,14 +418,14 @@ private fun WelcomeCard(onExample: (String) -> Unit) {
                 Column {
                     Text("你好，我是日序 AI 助手", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "纯文字聊天；不会创建或修改日程",
+                        "随口聊，也能帮你整理日程草稿",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
             Text("试试这样说：", fontSize = 12.sp)
-            com.jsy.dayplan.ai.AiPrompts.examplePlainPrompts().forEach { ex ->
+            listOf("明天上午九点在地铁站集合，帮我记一下", "明早去医院，帮我安排一下", "用一句话解释一下机会成本").forEach { ex ->
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f),
@@ -425,7 +435,7 @@ private fun WelcomeCard(onExample: (String) -> Unit) {
                 }
             }
             Text(
-                "需要安排日程时，请到首页手动新增；这里只聊天。",
+                "信息不全可以接着补充；草稿确认后才保存，保存后可撤销。",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -543,9 +553,10 @@ private val OP_LABELS = mapOf(
 fun actionDateTimeLine(a: AiAction): String = buildString {
     when {
         a.op.endsWith("schedule") -> {
-            append(a.startDate ?: "?")
+            append(a.startDate ?: "日期待补充")
             if (a.endDate != null && a.endDate != a.startDate) append(" 至 ").append(a.endDate)
-            if (a.allDay) append(" 全天") else append(" ").append(a.startTime ?: "?").append("-").append(a.endTime ?: "?")
+            if (a.allDay) append(" 全天") else if (a.startTime.isNullOrBlank()) append(" · 时间待补充")
+            else append(" ").append(a.startTime).append("–").append(a.endTime ?: "结束时间待补充")
             if (a.location.isNotBlank()) append(" · ").append(a.location)
         }
 
@@ -605,7 +616,7 @@ private fun PendingBatchCard(
                     color = MaterialTheme.colorScheme.primaryContainer,
                 ) {
                     Text(
-                        if (rec.origin == "attachment") "附件批次 · 先预览" else "计划草稿",
+                        if (rec.origin == "attachment") "附件批次 · 先预览" else "日程草稿 · 尚未保存",
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -617,7 +628,8 @@ private fun PendingBatchCard(
                     fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 )
                 Spacer(Modifier.weight(1f))
-                Text("待确认", fontSize = 11.sp, color = MaterialTheme.colorScheme.tertiary)
+                Text(if (rec.origin == "assistant" && page.any { it.status != "ok" }) "待补全" else "待确认",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.tertiary)
             }
             if (rec.reply.isNotBlank()) Text(rec.reply, fontSize = 13.sp)
             if (rec.attachmentNames.isNotEmpty()) {
@@ -645,7 +657,7 @@ private fun PendingBatchCard(
                 )
             }
 
-            Row {
+            if (rec.origin != "assistant") Row {
                 FilterChip(
                     selected = ui.onlyIssues,
                     onClick = { vm.setOnlyIssues(batchId, !ui.onlyIssues) },
@@ -662,8 +674,8 @@ private fun PendingBatchCard(
             }
 
             shown.forEach { r -> ActionRow(r, ui.selection[r.action.clientActionId] ?: false, {
-                vm.toggleSelect(batchId, r.action.clientActionId)
-            }, { onEdit(batchId to r.action) }) }
+                if (!busy) vm.toggleSelect(batchId, r.action.clientActionId)
+            }, { if (!busy) onEdit(batchId to r.action) }, conversational = rec.origin == "assistant") }
 
             if (rec.actions.size > page.size) {
                 Text(
@@ -674,11 +686,10 @@ private fun PendingBatchCard(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "已选 $selectedCount 项",
-                    fontSize = 12.sp,
-                    modifier = Modifier.weight(1f),
-                )
+                if (rec.origin == "assistant") {
+                    TextButton(onClick = { vm.cancelDraft(batchId) }, enabled = !busy,
+                        modifier = Modifier.weight(1f)) { Text("取消草稿") }
+                } else Text("已选 $selectedCount 项", fontSize = 12.sp, modifier = Modifier.weight(1f))
                 OutlinedButton(
                     onClick = {
                         vm.applyBatch(batchId) { outcome ->
@@ -701,8 +712,12 @@ private fun PendingBatchCard(
                             }
                         }
                     },
-                    enabled = selectedCount > 0 && !busy,
-                ) { Text(if (busy) "导入中…" else "导入选中 $selectedCount 项") }
+                    enabled = selectedCount > 0 && !busy && (rec.origin != "assistant" || selectedCount == rec.actions.size),
+                ) { Text(if (busy) "处理中…" else if (rec.origin == "assistant") "确认保存" else "导入选中 $selectedCount 项") }
+            }
+            if (rec.origin == "assistant" && page.any { it.status != "ok" }) {
+                Text("在下方回复“九点”“改成周五”即可补充，也可点编辑；所有事项补全后一起确认保存。",
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -714,6 +729,7 @@ private fun ActionRow(
     checked: Boolean,
     onToggle: () -> Unit,
     onEdit: () -> Unit,
+    conversational: Boolean = false,
 ) {
     val a = r.action
     Column(
@@ -727,12 +743,13 @@ private fun ActionRow(
             .padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.Top) {
-            Checkbox(
+            if (!conversational) Checkbox(
                 checked = checked,
                 onCheckedChange = { if (r.status == "ok") onToggle() },
                 enabled = r.status == "ok",
                 modifier = Modifier.size(32.dp),
-            )
+            ) else Text(if (r.status == "ok") "✓" else "…", modifier = Modifier.size(32.dp),
+                color = MaterialTheme.colorScheme.primary, fontSize = 18.sp)
             Column(Modifier.weight(1f)) {
                 Text(
                     "${OP_LABELS[a.op] ?: a.op} · ${a.title}",
@@ -767,7 +784,9 @@ private fun ActionRow(
                     Text(r.sourceLabel, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 r.problems.forEach {
-                    Text("✗ $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                    val message = if (conversational && it == "非全天日程需要开始与结束时间（HH:mm）")
+                        "补充具体开始时间后，就可以继续准备草稿。" else it
+                    Text(message, fontSize = 11.sp, color = if (conversational) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error)
                 }
                 if (r.conflicts.isNotEmpty()) {
                     Text(
@@ -997,7 +1016,7 @@ private fun InputBar(
                         onValueChange = { if (it.length <= 4000) vm.input.value = it },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(22.dp),
-                        placeholder = { Text("想聊点什么…") },
+                        placeholder = { Text("想聊什么，或安排点什么…") },
                         maxLines = 4,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color.Transparent,
@@ -1049,7 +1068,7 @@ private fun InputBar(
                 }
             }
             Text(
-                "纯聊天，不读取或修改日程。",
+                "可聊天、整理日程草稿；确认后才保存。",
                 fontSize = 9.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp),

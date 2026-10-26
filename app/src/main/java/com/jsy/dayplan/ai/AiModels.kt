@@ -136,6 +136,8 @@ data class AiAction(
     val assumptions: List<String> = emptyList(),
     /** 证据来源（附件段落/页/单元格 id）；本地必须能对上，否则拒绝。 */
     val sourceIds: List<String> = emptyList(),
+    /** Assistant draft duration: retained so a later start-time change can move the end time too. */
+    val durationMinutes: Int? = null,
 )
 
 /** 供 UI 展示的单条动作摘要（含本地校验结果），与 AiAction 一一对应。 */

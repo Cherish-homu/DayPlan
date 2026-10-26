@@ -46,7 +46,7 @@ class SseParserTest {
     }
 
     @Test
-    fun `非流式 content 数组与 reasoning 兜底`() {
+    fun `非流式支持内容数组 但思考不能冒充最终答复`() {
         val array = DeepSeekClient.parseCompletion(
             """{"choices":[{"message":{"content":[{"type":"text","text":"正文"}]},"finish_reason":"stop"}]}""",
         )
@@ -55,7 +55,8 @@ class SseParserTest {
         val reasoning = DeepSeekClient.parseCompletion(
             """{"choices":[{"message":{"content":"","reasoning_content":"思考正文"},"finish_reason":"stop"}]}""",
         )
-        assertEquals("思考正文", reasoning.content)
+        assertEquals("", reasoning.content)
+        assertEquals("思考正文", reasoning.reasoning)
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.jsy.dayplan.ai
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.*
 
 /**
  * 演示（Mock）通道：仅在 debug 变体可用，产生明确标识为 Mock 的演示计划，
@@ -23,6 +24,21 @@ class MockDeepSeekTransport(
         return withContext(Dispatchers.Default) {
             // 模拟网络延迟，便于界面展示“请求中/可取消”
             kotlinx.coroutines.delay(600)
+            if (request.body?.contains("\"tools\"") == true) {
+                val result = assistantReply(request)
+                return@withContext TransportResponse(200, buildJsonObject {
+                    put("choices", buildJsonArray { add(buildJsonObject {
+                        put("finish_reason", result.finishReason)
+                        put("message", buildJsonObject {
+                            put("content", result.content)
+                            put("tool_calls", buildJsonArray { result.toolCalls.forEach { tool -> add(buildJsonObject {
+                                put("id", tool.id); put("type", "function")
+                                put("function", buildJsonObject { put("name", tool.name); put("arguments", tool.arguments) })
+                            }) } })
+                        })
+                    }) })
+                }.toString())
+            }
             // 与官方 Chat Completions 相同的外层结构：content 内是回复文本
             val content = kotlinx.serialization.json.JsonPrimitive(replyContent(request)).toString()
             TransportResponse(
@@ -39,6 +55,12 @@ class MockDeepSeekTransport(
         onDelta: (String) -> Unit,
     ): ChatResult {
         capturedRequests.add(request)
+        if (request.body?.contains("\"tools\"") == true) {
+            kotlinx.coroutines.delay(450)
+            val result = assistantReply(request)
+            result.content.chunked(6).forEach { onDelta(it); kotlinx.coroutines.delay(50) }
+            return result
+        }
         val content = replyContent(request)
         var index = 0
         while (index < content.length) {
@@ -69,6 +91,50 @@ class MockDeepSeekTransport(
             }
             else -> defaultPlan(request)
         }
+    }
+
+    private fun assistantReply(request: TransportRequest): ChatResult {
+        val messages = AiProtocol.json.parseToJsonElement(request.body!!).jsonObject["messages"]!!.jsonArray
+        val user = messages.last().jsonObject["content"]!!.jsonPrimitive.content
+        val system = messages.first().jsonObject["content"]!!.jsonPrimitive.content
+        if (user == "/empty") return ChatResult("", "stop", null)
+        if (user == "/error") throw AiException.Network("Mock 演示断网，尚未保存")
+        val drafts = system.lines().firstOrNull { it.startsWith("[{\"draftId\"") }
+            ?.let { AiProtocol.json.parseToJsonElement(it).jsonArray } ?: JsonArray(emptyList())
+        val old = drafts.lastOrNull()?.jsonObject
+        fun call(name: String, args: JsonObject) = ChatResult("", "tool_calls", ChatUsage(0, 0),
+            listOf(ToolCall("mock_call", name, args.toString())))
+        if (old != null && (user.contains("取消") || user.contains("先别"))) {
+            return call("cancel_draft", buildJsonObject { put("draftId", old["draftId"]!!) })
+        }
+        val time = when {
+            user.contains("十点") || user.contains("10:00") -> "10:00"
+            user.contains("九点") || user.contains("9点") || user.contains("9:00") -> "09:00"
+            else -> null
+        }
+        val followup = old != null && (user.startsWith("改") || user == "九点吧" || user == "九点" || user.startsWith("备注"))
+        if (followup || user.contains("记") || user.contains("安排") || user.contains("集合") || user.contains("医院")) {
+            val date = Regex("\\d{4}-\\d{2}-\\d{2}").find(system)?.value
+                ?.let(java.time.LocalDate::parse) ?: java.time.LocalDate.now()
+            val action = buildJsonObject {
+                if (followup) {
+                    put("clientActionId", old!!["actions"]!!.jsonArray.first().jsonObject["clientActionId"]!!)
+                } else {
+                    put("op", "create_schedule")
+                    put("title", if (user.contains("医院")) "去医院（Mock 演示）" else "地铁站集合（Mock 演示）")
+                    put("startDate", date.plusDays(1).toString())
+                    put("location", if (user.contains("医院")) "市医院" else "洋湖新城2号口")
+                }
+                time?.let { put("startTime", it) }
+                if (user.startsWith("备注")) put("note", user.removePrefix("备注"))
+            }
+            return call("propose_draft", buildJsonObject {
+                put("operation", if (followup) "update" else "create")
+                if (followup) put("draftId", old!!["draftId"]!!)
+                put("actions", buildJsonArray { add(action) })
+            })
+        }
+        return ChatResult("【Mock 演示】我可以自然聊天，也能整理待确认草稿；只有点确认保存后才写入日程。", "stop", ChatUsage(0, 0))
     }
 
     private fun defaultPlan(request: TransportRequest): String {

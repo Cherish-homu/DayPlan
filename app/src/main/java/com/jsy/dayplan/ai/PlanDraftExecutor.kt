@@ -456,6 +456,7 @@ class PlanDraftExecutor(
         config: AiConfig,
     ): Boolean {
         if (!config.autoSave) return false
+        if (batch.origin == "assistant") return false
         if (batch.origin == "attachment") return false
         if (batch.questions.isNotEmpty()) return false
         val acts = batch.actions

@@ -113,7 +113,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                     }
                     Text(
                         "使用你本人的 DeepSeek API Key 直连官方服务（https://api.deepseek.com）。" +
-                            "点击发送时，本次聊天文字会发送到 DeepSeek；不会发送本地日程、待办、倒数日或备份。" +
+                            "点击发送时，本次聊天文字和待确认草稿会发送到 DeepSeek；不会发送已保存日程、待办、倒数日或备份，时间冲突在本机核对。" +
                             "费用由你的 DeepSeek 账户按实际调用结算。",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -199,7 +199,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        "空回复会自动重试；连续为空时显示一条本地提示，不会留下空白回复。",
+                        "回复不完整会自动重试一次；失败时保留原话并提示尚未保存。只有点确认保存才写入日程。",
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -220,6 +220,23 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                             testMsg = "已请求刷新模型列表（需要有效 Key）"
                         }) { Text("刷新模型列表") }
                     }
+                }
+            }
+
+            GlassCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("日程草稿", style = MaterialTheme.typography.titleMedium)
+                    Text("只说开始时间时，结束时间按默认时长补齐并在草稿中标明；你可以继续用文字修改。",
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(15, 30, 60).forEach { minutes ->
+                            FilterChip(selected = cfg.defaultDurationMinutes == minutes,
+                                onClick = { update(cfg.copy(defaultDurationMinutes = minutes)) },
+                                label = { Text("$minutes 分钟", fontSize = 12.sp) })
+                        }
+                    }
+                    Text("当前默认 ${cfg.defaultDurationMinutes} 分钟；没有明确要求时不添加提醒。",
+                        fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -316,7 +333,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
             }
 
             Text(
-                "日序 v1.7.7 · AI 为可选功能，需自备 Key；离线功能不依赖网络",
+                "日序 v1.7.8 · AI 为可选功能，需自备 Key；离线功能不依赖网络",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -94,11 +94,14 @@ class AiViewModel @JvmOverloads constructor(
     private var sendJob: Job? = null
     val sending: Boolean get() = sendState.value is SendState.Sending
 
+    private val reloadSequence = java.util.concurrent.atomic.AtomicLong()
+
     init {
         reload()
     }
 
     fun reload() {
+        val sequence = reloadSequence.incrementAndGet()
         viewModelScope.launch(Dispatchers.IO) {
             val entries = ai.chatStore.load()
             val ctx = ai.executor.loadContext()
@@ -145,6 +148,7 @@ class AiViewModel @JvmOverloads constructor(
             }
             val context = ai.controller.contextAttachments()
             withContext(Dispatchers.Main) {
+                if (sequence != reloadSequence.get()) return@withContext
                 _entries.value = entries
                 _batches.value = list
                 appliedRecords.value = applied
@@ -175,7 +179,7 @@ class AiViewModel @JvmOverloads constructor(
         if (sending) return
         val normalized = AiConfig.normalizedChatMode(mode)
         if (normalized == ai.settings.config.chatMode) return
-        if (normalized == AiConfig.MODE_PLAIN) {
+        if (normalized == AiConfig.MODE_PLAIN || normalized == AiConfig.MODE_ASSISTANT) {
             attachments.value.forEach { ai.attachmentStore.delete(it.id) }
             attachments.value = emptyList()
             attachmentMeta.value = emptyMap()
@@ -332,12 +336,21 @@ class AiViewModel @JvmOverloads constructor(
 
     // ---------- 发送 ----------
 
-    fun send() {
+    private var lastFailedText: String? = null
+
+    fun send() = sendText(null)
+
+    fun retryLastSend() {
+        val failed = lastFailedText ?: return
+        sendText(failed)
+    }
+
+    private fun sendText(retryText: String?) {
         if (sending) return
         lastSavedNotice.value = null
         streamingReply.value = ""
-        val text = input.value.trim()
-        val atts = attachments.value
+        val text = (retryText ?: input.value).trim()
+        val atts = if (retryText == null) attachments.value else emptyList()
         val plain = ai.settings.config.chatMode == AiConfig.MODE_PLAIN
         if (text.isEmpty() && atts.isEmpty()) return
         if (plain && atts.isNotEmpty()) {
@@ -361,6 +374,7 @@ class AiViewModel @JvmOverloads constructor(
                     atts,
                     AttachmentOptions(pdfPages.value, xlsxSheets.value),
                     onDelta = { delta -> streamingReply.update { it + delta } },
+                    onReset = { streamingReply.value = "" },
                 ) { stage ->
                     sendState.value = SendState.Sending(0, atts.size, stage)
                 }
@@ -372,6 +386,7 @@ class AiViewModel @JvmOverloads constructor(
                     pdfPages.value = emptyMap()
                     xlsxSheets.value = emptyMap()
                     streamingReply.value = ""
+                    lastFailedText = null
                     sendState.value = SendState.Idle
                     reload()
                 }
@@ -382,20 +397,24 @@ class AiViewModel @JvmOverloads constructor(
                 }
                 throw e
             } catch (e: AiException.Cancelled) {
+                lastFailedText = null
                 withContext(Dispatchers.Main) {
                     streamingReply.value = ""
                     sendState.value = SendState.Failed(e.message ?: "已取消", false)
                     reload()
                 }
             } catch (e: AiException) {
+                lastFailedText = text
                 withContext(Dispatchers.Main) {
                     streamingReply.value = ""
                     sendState.value = SendState.Failed(
                         friendlyError(e),
-                        retryable = e !is AiException.NotConfigured && e !is AiException.Capability,
+                        retryable = e !is AiException.NotConfigured && e !is AiException.Capability &&
+                            e !is AiException.Auth && e !is AiException.Quota,
                     )
                 }
             } catch (e: Exception) {
+                lastFailedText = text
                 withContext(Dispatchers.Main) {
                     streamingReply.value = ""
                     sendState.value = SendState.Failed("发送失败：${e.message ?: "未知错误"}", true)
@@ -441,12 +460,18 @@ class AiViewModel @JvmOverloads constructor(
 
     /** 编辑草稿条目后重新保存批次并重审（后台执行，不阻塞输入）。 */
     fun updateAction(batchId: String, edited: com.jsy.dayplan.ai.AiAction) {
+        if (sending || batchId in busyBatchIds.value) return
+        busyBatchIds.value = busyBatchIds.value + batchId
         viewModelScope.launch(Dispatchers.IO) {
+          try {
             val rec = ai.batchStore.load(batchId) ?: return@launch
+            if (!rec.isPending) return@launch
+            val finalEdit = if (rec.origin == "assistant") edited.copy(durationMinutes = null,
+                assumptions = edited.assumptions.filterNot { it.startsWith("结束时间按默认时长") }) else edited
+            val actions = rec.actions.map { if (it.clientActionId == finalEdit.clientActionId) finalEdit else it }
             val updated = rec.copy(
-                actions = rec.actions.map {
-                    if (it.clientActionId == edited.clientActionId) edited else it
-                },
+                actions = actions,
+                questions = if (rec.origin == "assistant") com.jsy.dayplan.ai.AssistantDrafts.missingQuestions(actions) else rec.questions,
             )
             ai.batchStore.save(updated)
             val ctx = ai.executor.loadContext()
@@ -463,18 +488,25 @@ class AiViewModel @JvmOverloads constructor(
                     _batches.value = list
                 }
             }
+          } catch (e: Exception) {
+              withContext(Dispatchers.Main) { sendState.value = SendState.Failed("草稿修改未保存，请重试", false) }
+          } finally {
+              withContext(Dispatchers.Main) { busyBatchIds.value = busyBatchIds.value - batchId }
+          }
         }
     }
 
     fun applyBatch(batchId: String, onDone: (ApplyOutcome) -> Unit) {
         // 同步占位，双击时第二次直接返回；执行器/DB 仍做最终幂等
-        if (batchId in busyBatchIds.value) return
+        if (sending || batchId in busyBatchIds.value) return
         busyBatchIds.value = busyBatchIds.value + batchId
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val ui = _batches.value.find { it.record.batchId == batchId }
                 val selected = ui?.selection?.filterValues { it }?.keys ?: emptySet()
-                val outcome = ai.executor.applySelected(batchId, selected)
+                val outcome = if (ui?.record?.origin == "assistant" && selected.size != ui.record.actions.size)
+                    ApplyOutcome.Failed("还有事项未补全，请补充后一起确认保存；本次未写入")
+                    else ai.executor.applySelected(batchId, selected)
                 if (outcome is ApplyOutcome.Success) ai.controller.markBatchApplied(batchId)
                 withContext(Dispatchers.Main) {
                     if (outcome is ApplyOutcome.Success) {
@@ -511,6 +543,23 @@ class AiViewModel @JvmOverloads constructor(
         }
     }
 
+    fun cancelDraft(batchId: String) {
+        if (sending || batchId in busyBatchIds.value) return
+        busyBatchIds.value = busyBatchIds.value + batchId
+        viewModelScope.launch(Dispatchers.IO) {
+            try { ai.controller.cancelDraft(batchId) }
+            catch (e: Exception) {
+                withContext(Dispatchers.Main) { sendState.value = SendState.Failed("草稿取消失败，请稍后再试", false) }
+            }
+            finally {
+                withContext(Dispatchers.Main) {
+                    busyBatchIds.value = busyBatchIds.value - batchId
+                    reload()
+                }
+            }
+        }
+    }
+
     /** 已保存批次的结果展示（优先 Room 提交事实，JSON 丢失仍可撤销）。 */
     fun appliedBatch(batchId: String): BatchRecord? =
         appliedRecords.value[batchId] ?: ai.batchStore.load(batchId)
@@ -531,6 +580,7 @@ class AiViewModel @JvmOverloads constructor(
                 contextAttachments.value = emptyList()
                 appliedRecords.value = emptyMap()
                 lastSavedNotice.value = null
+                lastFailedText = null
                 streamingReply.value = ""
                 reload()
             }

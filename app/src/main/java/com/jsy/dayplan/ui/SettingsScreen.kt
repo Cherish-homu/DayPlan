@@ -408,7 +408,7 @@ fun SettingsScreen(
                 icon = Icons.Filled.Info,
                 iconTint = countdownMarkColor(),
                 title = "关于",
-                summary = "日序 v1.7.7 · 本地离线 · 无账号",
+                summary = "日序 v1.7.8 · 本地离线 · 无账号",
                 expanded = expanded == "about",
                 onToggle = { expanded = if (expanded == "about") null else "about" },
             ) {
@@ -428,7 +428,7 @@ fun SettingsScreen(
             }
 
             Text(
-                "日序 v1.7.7 · 数据保存在应用私有目录",
+                "日序 v1.7.8 · 数据保存在应用私有目录",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, bottom = 80.dp),

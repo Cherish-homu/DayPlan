@@ -115,10 +115,7 @@ class HttpTransport : StreamingChatTransport {
                 throw DeepSeekClient.mappedError(code, body)
             }
 
-            val content = StringBuilder()
-            val reasoning = StringBuilder()
-            var finish = "stop"
-            var usage: ChatUsage? = null
+            val result = StreamResultAccumulator()
             var totalBytes = 0L
             conn.inputStream.use { input ->
                 val reader = input.bufferedReader(Charsets.UTF_8)
@@ -139,18 +136,11 @@ class HttpTransport : StreamingChatTransport {
                     chunk.error?.let {
                         throw AiException.Server("DeepSeek 流式响应错误：$it")
                     }
-                    chunk.delta?.takeIf { it.isNotEmpty() }?.let {
-                        content.append(it)
-                        onDelta(it)
-                    }
-                    chunk.reasoning?.takeIf { it.isNotEmpty() }?.let { reasoning.append(it) }
-                    chunk.finishReason?.let { finish = it }
-                    chunk.usage?.let { usage = it }
+                    result.add(chunk)
+                    chunk.delta?.takeIf { it.isNotEmpty() }?.let(onDelta)
                 }
             }
-            // 推理模型可能把可见内容放在 reasoning_content；至少保证返回非空正文
-            val text = content.toString().ifBlank { reasoning.toString() }
-            ChatResult(text, finish, usage)
+            result.finish()
         } catch (e: java.net.SocketTimeoutException) {
             throw AiException.Timeout("连接超时，请稍后重试")
         } catch (e: javax.net.ssl.SSLException) {
@@ -211,7 +201,42 @@ data class ChatResult(
     val content: String,
     val finishReason: String,
     val usage: ChatUsage?,
+    val toolCalls: List<ToolCall> = emptyList(),
+    val reasoning: String = "",
 )
+
+data class ToolCall(val id: String, val name: String, val arguments: String)
+data class ToolCallDelta(val index: Int, val id: String = "", val name: String = "", val arguments: String = "")
+
+/** Only a completed stream is actionable. Reasoning is never presented as a final answer. */
+class StreamResultAccumulator {
+    private val content = StringBuilder()
+    private val reasoning = StringBuilder()
+    private val calls = sortedMapOf<Int, Triple<StringBuilder, StringBuilder, StringBuilder>>()
+    private var finishReason: String? = null
+    private var usage: ChatUsage? = null
+
+    fun add(chunk: SseChunk) {
+        chunk.delta?.let(content::append)
+        chunk.reasoning?.let(reasoning::append)
+        chunk.finishReason?.let { finishReason = it }
+        chunk.usage?.let { usage = it }
+        chunk.toolCalls.forEach { d ->
+            if (d.index !in 0 until AiProtocol.PAGE_SIZE) throw AiException.Protocol("一次最多整理 20 个工具请求，请分批发送")
+            val c = calls.getOrPut(d.index) { Triple(StringBuilder(), StringBuilder(), StringBuilder()) }
+            c.first.append(d.id)
+            c.second.append(d.name)
+            c.third.append(d.arguments)
+        }
+    }
+
+    fun finish(): ChatResult {
+        val reason = finishReason ?: throw AiException.Network("回复连接提前结束，尚未保存；请重试")
+        return ChatResult(content.toString(), reason, usage,
+            calls.values.map { ToolCall(it.first.toString(), it.second.toString(), it.third.toString()) },
+            reasoning.toString())
+    }
+}
 
 /** SSE 一行 data 的解析结果（普通聊天流式输出）。 */
 data class SseChunk(
@@ -221,6 +246,7 @@ data class SseChunk(
     val finishReason: String? = null,
     val usage: ChatUsage? = null,
     val error: String? = null,
+    val toolCalls: List<ToolCallDelta> = emptyList(),
 )
 
 /** content 既可能是字符串，也可能是 [{type:text,text:...}] 块数组。 */
@@ -242,7 +268,7 @@ object SseParser {
                 return SseChunk(error = it.take(200))
             }
             val choice = obj["choices"]?.jsonArray?.firstOrNull()?.jsonObject
-            val deltaObject = choice?.get("delta")?.jsonObject
+            val deltaObject = choice?.get("delta") as? JsonObject
             val content = textContent(deltaObject?.get("content"))
             val reasoning = textContent(deltaObject?.get("reasoning_content"))
                 .ifBlank { textContent(deltaObject?.get("reasoning")) }
@@ -255,12 +281,21 @@ object SseParser {
                     u["completion_tokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
                 )
             }
-            if (content.isBlank() && reasoning.isBlank() && finish == null && usage == null) null
+            val calls = deltaObject?.get("tool_calls")?.takeIf { it !is JsonNull }?.jsonArray?.map { element ->
+                val call = element.jsonObject
+                val function = call["function"] as? JsonObject
+                ToolCallDelta(
+                    call["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                    textContent(call["id"]), textContent(function?.get("name")), textContent(function?.get("arguments")),
+                )
+            } ?: emptyList()
+            if (content.isBlank() && reasoning.isBlank() && finish == null && usage == null && calls.isEmpty()) null
             else SseChunk(
                 delta = content.ifBlank { null },
                 reasoning = reasoning.ifBlank { null },
                 finishReason = finish,
                 usage = usage,
+                toolCalls = calls,
             )
         } catch (e: Exception) {
             // 单行格式异常不应中断整条流
@@ -304,6 +339,7 @@ class DeepSeekClient(
         temperature: Double,
         stream: Boolean,
         disableThinking: Boolean,
+        tools: JsonArray? = null,
     ): String = buildJsonObject {
         put("model", model)
         put("messages", JsonArray(messages.map { m ->
@@ -316,6 +352,10 @@ class DeepSeekClient(
             put("response_format", buildJsonObject {
                 put("type", "json_object")
             })
+        }
+        if (tools != null) {
+            put("tools", tools)
+            put("tool_choice", "auto")
         }
         // 规划 JSON 需要稳定输出，关闭思考；纯聊天则交给模型自然回答。
         // 对只支持思考的模型强制 disabled 可能得到空 content，因此仅在需要时发送。
@@ -339,6 +379,7 @@ class DeepSeekClient(
         maxTokens: Int = AiLimits.MAX_TOKENS,
         temperature: Double = 0.3,
         disableThinking: Boolean = true,
+        tools: JsonArray? = null,
     ): ChatResult {
         val resp = transportProvider().call(
             TransportRequest(
@@ -347,7 +388,7 @@ class DeepSeekClient(
                 headers = headers(requireKey()),
                 body = buildCompletionBody(
                     model, messages, jsonMode, maxTokens, temperature,
-                    stream = false, disableThinking = disableThinking,
+                    stream = false, disableThinking = disableThinking, tools = tools,
                 ),
             ),
         )
@@ -364,6 +405,7 @@ class DeepSeekClient(
         messages: List<WireMessage>,
         maxTokens: Int = AiLimits.MAX_TOKENS,
         temperature: Double = 0.7,
+        tools: JsonArray? = null,
         onDelta: (String) -> Unit,
     ): ChatResult {
         val streamingRequest = TransportRequest(
@@ -372,7 +414,7 @@ class DeepSeekClient(
             headers = headers(requireKey()),
             body = buildCompletionBody(
                 model, messages, jsonMode = false, maxTokens, temperature,
-                stream = true, disableThinking = false,
+                stream = true, disableThinking = false, tools = tools,
             ),
         )
         val t = transportProvider()
@@ -382,7 +424,7 @@ class DeepSeekClient(
             streamingRequest.copy(
                 body = buildCompletionBody(
                     model, messages, jsonMode = false, maxTokens, temperature,
-                    stream = false, disableThinking = false,
+                    stream = false, disableThinking = false, tools = tools,
                 ),
             ),
         )
@@ -433,9 +475,13 @@ class DeepSeekClient(
             val choice = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
                 ?: throw AiException.Protocol("响应缺少 choices")
             val message = choice["message"]?.jsonObject
-            // content 可能是字符串或文本块数组；推理模型可能只给 reasoning_content
             val content = textContent(message?.get("content"))
-                .ifBlank { textContent(message?.get("reasoning_content")) }
+            val reasoning = textContent(message?.get("reasoning_content"))
+            val tools = message?.get("tool_calls")?.takeIf { it !is JsonNull }?.jsonArray?.map { element ->
+                val call = element.jsonObject
+                val function = call["function"]?.jsonObject ?: throw AiException.Protocol("工具回复缺少 function")
+                ToolCall(textContent(call["id"]), textContent(function["name"]), textContent(function["arguments"]))
+            } ?: emptyList()
             val finish = choice["finish_reason"]?.jsonPrimitive?.content ?: "stop"
             val usage = root["usage"]?.jsonObject?.let { u ->
                 ChatUsage(
@@ -443,7 +489,7 @@ class DeepSeekClient(
                     u["completion_tokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
                 )
             }
-            ChatResult(content, finish, usage)
+            ChatResult(content, finish, usage, tools, reasoning)
         } catch (e: AiException) {
             throw e
         } catch (e: Exception) {

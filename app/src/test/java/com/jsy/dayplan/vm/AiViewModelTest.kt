@@ -171,6 +171,74 @@ class AiViewModelTest {
         assertTrue(vm.readiness() == com.jsy.dayplan.ai.ChatController.Readiness.READY)
     }
 
+    @Test
+    fun `重试失败消息不会发送或清空正在起草的下一条`() {
+        val requests = mutableListOf<com.jsy.dayplan.ai.TransportRequest>()
+        container.setTransportForTest(object : com.jsy.dayplan.ai.ChatTransport {
+            override suspend fun call(request: com.jsy.dayplan.ai.TransportRequest): com.jsy.dayplan.ai.TransportResponse {
+                requests.add(request)
+                if (requests.size == 1) throw com.jsy.dayplan.ai.AiException.Server("synthetic failure")
+                return com.jsy.dayplan.ai.TransportResponse(200,
+                    """{"choices":[{"message":{"content":"你好"},"finish_reason":"stop"}]}""")
+            }
+        })
+        vm.setChatMode(com.jsy.dayplan.ai.AiConfig.MODE_ASSISTANT)
+        vm.input.value = "这次请求"
+        vm.send()
+        waitFor { vm.sendState.value is SendState.Failed }
+        assertTrue(vm.sendState.value is SendState.Failed)
+        assertEquals("这次请求", vm.input.value)
+        vm.input.value = "下一条还没发"
+        vm.retryLastSend()
+        waitFor { vm.sendState.value is SendState.Idle && vm.entries.value.any { it.role == "user" } }
+        assertEquals(2, requests.size)
+        assertTrue(requests.last().body!!.contains("这次请求"))
+        assertTrue(!requests.last().body!!.contains("下一条还没发"))
+        assertEquals("下一条还没发", vm.input.value)
+    }
+
+    @Test
+    fun `统一聊天连续空回复显示错误 原话保留且不写空白历史`() {
+        var count = 0
+        container.setTransportForTest(object : com.jsy.dayplan.ai.ChatTransport {
+            override suspend fun call(request: com.jsy.dayplan.ai.TransportRequest): com.jsy.dayplan.ai.TransportResponse {
+                count++
+                return com.jsy.dayplan.ai.TransportResponse(200,
+                    """{"choices":[{"message":{"content":null},"finish_reason":"stop"}]}""")
+            }
+        })
+        vm.setChatMode(com.jsy.dayplan.ai.AiConfig.MODE_ASSISTANT)
+        vm.input.value = "明天去医院"
+        vm.send()
+        waitFor { vm.sendState.value is SendState.Failed }
+        assertTrue(vm.sendState.value is SendState.Failed)
+        assertEquals(2, count)
+        assertEquals("明天去医院", vm.input.value)
+        assertTrue(container.chatStore.load().isEmpty())
+        assertTrue(container.batchStore.all().isEmpty())
+    }
+
+    @Test
+    fun `多事项草稿尚有缺项时不可部分保存而丢失剩余事项`() {
+        vm.setChatMode(com.jsy.dayplan.ai.AiConfig.MODE_ASSISTANT)
+        val boundary = runBlocking { container.executor.currentBoundary() }
+        val batch = com.jsy.dayplan.ai.BatchRecord("assistant_partial", "request", boundary.second,
+            1L, boundary.first, "assistant", "待补全", actions = listOf(
+                com.jsy.dayplan.ai.AiAction(clientActionId = "todo", op = "create_todo", title = "买牙膏"),
+                com.jsy.dayplan.ai.AiAction(clientActionId = "event", op = "create_schedule", title = "看牙", startDate = "2026-10-27")
+            ), state = "PENDING")
+        container.batchStore.save(batch)
+        vm.reload()
+        waitFor { vm.batches.value.any { it.record.batchId == batch.batchId } }
+        var outcome: com.jsy.dayplan.ai.ApplyOutcome? = null
+        vm.applyBatch(batch.batchId) { outcome = it }
+        waitFor { outcome != null }
+        assertTrue(outcome is com.jsy.dayplan.ai.ApplyOutcome.Failed)
+        assertEquals(0, runBlocking { db.dao().totalItemCount() })
+        assertTrue(container.batchStore.load(batch.batchId)!!.isPending)
+        assertEquals(2, container.batchStore.load(batch.batchId)!!.actions.size)
+    }
+
     private fun assertNotNullMasked() {
         assertTrue("已配置 Key 应有掩码", vm.maskedKey() != null)
     }

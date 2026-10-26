@@ -25,9 +25,10 @@ data class AiConfig(
     companion object {
         const val MODE_PLANNER = "planner"
         const val MODE_PLAIN = "plain"
+        const val MODE_ASSISTANT = "assistant"
 
         fun normalizedChatMode(raw: String?): String =
-            if (raw == MODE_PLAIN) MODE_PLAIN else MODE_PLANNER
+            when (raw) { MODE_PLAIN -> MODE_PLAIN; MODE_ASSISTANT -> MODE_ASSISTANT; else -> MODE_PLANNER }
 
         const val DEFAULT_MODEL = "deepseek-flash"
 

@@ -78,12 +78,18 @@ class ChatController(
         attachments: List<PendingAttachment> = emptyList(),
         options: AttachmentOptions = AttachmentOptions(),
         onDelta: ((String) -> Unit)? = null,
+        onReset: (() -> Unit)? = null,
         onStage: ((String) -> Unit)? = null,
     ): ChatTurn {
         val config = settings.config
         val key = keyStore.loadApiKey()
         if (!config.enabled || key == null) {
             throw AiException.NotConfigured("请先在“AI 助手设置”中启用助手并填写 API Key")
+        }
+        if (config.chatMode == AiConfig.MODE_ASSISTANT) {
+            if (attachments.isNotEmpty()) throw AiException.Protocol("当前聊天只接收文字；请先用文字描述安排")
+            return AssistantConversation(client, settings, clock, executor, batchStore, history, nowProvider)
+                .send(rawText, onDelta, onStage, onReset)
         }
         if (attachments.isEmpty() && AiModeIdentity.isModeQuestion(rawText)) {
             val (generation, sessionId) = executor.currentBoundary()
@@ -619,6 +625,17 @@ class ChatController(
     }
 
     /** 用户手动确认保存后，把对应的“计划”消息改为“已保存结果”卡片（可撤销）。 */
+    fun cancelDraft(batchId: String) {
+        val batch = batchStore.load(batchId) ?: return
+        val (generation, session) = inMemoryBoundary()
+        if (!batch.isPending || batch.sessionId != session || batch.dataGeneration != generation) return
+        batchStore.save(batch.copy(state = "CANCELLED"))
+        history.saveAll(history.load().map {
+            if (it.batchId == batchId && it.kind == "plan") it.copy(kind = "text", batchId = null,
+                text = "草稿已取消，未创建日程。") else it
+        })
+    }
+
     fun markBatchApplied(batchId: String) {
         runCatching {
             val list = history.load().map {
