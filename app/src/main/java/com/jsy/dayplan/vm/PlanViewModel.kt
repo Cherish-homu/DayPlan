@@ -86,6 +86,13 @@ class PlanViewModel @JvmOverloads constructor(
             .edit().putString("theme", m.name).apply()
     }
 
+    // ---------- 月历便签 ----------
+    val notesRevision: StateFlow<Long> = app0.dayNotes.revision
+    fun noteFor(date: LocalDate): com.jsy.dayplan.data.DayNote? =
+        app0.dayNotes.load(date.toString())
+    fun saveNote(date: LocalDate, text: String): com.jsy.dayplan.data.DayNote? =
+        app0.dayNotes.save(date.toString(), text)
+
     // ---------- 导航 ----------
     private val _stack = MutableStateFlow(listOf<Screen>(Screen.Today))
     val stack: StateFlow<List<Screen>> = _stack

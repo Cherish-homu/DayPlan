@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,6 +62,7 @@ fun CountdownsScreen(vm: PlanViewModel) {
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             PageTopBar(
                 title = "倒数日",
@@ -174,16 +176,12 @@ private fun CountdownRow(
     past: Boolean = false,
     onClick: () -> Unit,
 ) {
-    Card(
+    GlassCard(
         Modifier
             .fillMaxWidth()
             .padding(vertical = 5.dp)
             .clickable(onClick = onClick),
         shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(
-            containerColor = if (past) MaterialTheme.colorScheme.surfaceContainerLow
-            else MaterialTheme.colorScheme.surface,
-        ),
     ) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 12.dp),

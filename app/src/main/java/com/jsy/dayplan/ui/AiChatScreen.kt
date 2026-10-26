@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,11 +28,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -45,11 +48,13 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -59,6 +64,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -69,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jsy.dayplan.R
 import com.jsy.dayplan.ai.AiAction
+import com.jsy.dayplan.ai.AiConfig
 import com.jsy.dayplan.ai.AiException
 import com.jsy.dayplan.ai.ActionReview
 import com.jsy.dayplan.ai.ApplyOutcome
@@ -107,6 +115,7 @@ fun AiChatScreen(
     val sendState by vm.sendState.collectAsState()
     val configVersion by vm.configVersion.collectAsState()
     val savedNotice by vm.lastSavedNotice.collectAsState()
+    val streamingReply by vm.streamingReply.collectAsState()
     val listState = rememberLazyListState()
 
     var showClearConfirm by remember { mutableStateOf(false) }
@@ -114,6 +123,7 @@ fun AiChatScreen(
     var attachDialog by remember { mutableStateOf<PendingAttachment?>(null) }
 
     val readiness = remember(configVersion) { vm.readiness() }
+    val chatMode = remember(configVersion) { vm.chatMode() }
 
     // 附件选择：Photo Picker（图片）+ SAF（文件），点发送才真正联网
     val pickImage = rememberLauncherForActivityResult(
@@ -124,16 +134,35 @@ fun AiChatScreen(
     ) { uri -> vm.addAttachment(uri, null) }
 
     LaunchedEffect(Unit) {
+        // 单一聊天：不再提供模式切换，进入即固定为纯文字聊天。
+        if (vm.chatMode() != AiConfig.MODE_PLAIN) vm.setChatMode(AiConfig.MODE_PLAIN)
         // 进入聊天页时从 DB 边界/批次事实重载：恢复/快照回退后旧草稿立即显示失效
         vm.reload()
     }
     LaunchedEffect(entries.size, batches.size) {
-        if (entries.isNotEmpty()) listState.animateScrollToItem(listState.layoutInfo.totalItemsCount - 1)
+        if (entries.isNotEmpty()) {
+            val last = listState.layoutInfo.totalItemsCount - 1
+            if (last >= 0) {
+                if (reduceMotion) listState.scrollToItem(last)
+                else listState.animateScrollToItem(last)
+            }
+        }
+    }
+    LaunchedEffect(streamingReply.length) {
+        if (streamingReply.isNotEmpty()) {
+            val last = listState.layoutInfo.totalItemsCount - 1
+            if (last >= 0) listState.scrollToItem(last)
+        }
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    scrolledContainerColor = Color.Transparent,
+                ),
                 title = {
                     val chanStatus = ChanStatusLogic.from(
                         sendState,
@@ -141,6 +170,7 @@ fun AiChatScreen(
                         lastSaved = savedNotice,
                     )
                     val statusLine = when {
+                        sendState is SendState.Sending -> "正在回复…"
                         chanStatus.mood != ChanMood.IDLE -> statusText(chanStatus)
                         vm.isMockActive() -> "演示(Mock)模式 · 未连接真实服务"
                         readiness == com.jsy.dayplan.ai.ChatController.Readiness.NO_KEY ->
@@ -149,7 +179,7 @@ fun AiChatScreen(
                         readiness == com.jsy.dayplan.ai.ChatController.Readiness.DISABLED ->
                             "助手未启用"
 
-                        else -> "模型：${vm.config().model}"
+                        else -> vm.config().model
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         ChanAvatar(
@@ -185,7 +215,7 @@ fun AiChatScreen(
                 },
                 actions = {
                     IconButton(onClick = { showClearConfirm = true }) {
-                        Icon(Icons.Filled.DeleteSweep, contentDescription = "清空对话及附件缓存")
+                        Icon(Icons.Filled.DeleteSweep, contentDescription = "清空对话")
                     }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = "AI 设置")
@@ -197,29 +227,28 @@ fun AiChatScreen(
         Column(Modifier.padding(pad).fillMaxSize()) {
             // 未配置提示：跳设置，而不是假聊天
             if (readiness != com.jsy.dayplan.ai.ChatController.Readiness.READY) {
-                Card(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                ) {
-                    Row(
-                        Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                GlassCard(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                if (readiness == com.jsy.dayplan.ai.ChatController.Readiness.NO_KEY) {
-                                    "还没有配置 DeepSeek API Key"
-                                } else {
-                                    "AI 助手未启用"
-                                },
-                                style = MaterialTheme.typography.titleSmall,
-                            )
-                            Text(
-                                "离线功能不受影响；配置后即可在聊天中整理日程。",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        TextButton(onClick = onOpenSettings) { Text("去设置") }
+                        Text(
+                            if (readiness == com.jsy.dayplan.ai.ChatController.Readiness.NO_KEY) {
+                                "还没有配置 DeepSeek API Key"
+                            } else {
+                                "AI 助手未启用"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Text(
+                            "离线功能不受影响；配置后即可开始聊天。",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(
+                            onClick = onOpenSettings,
+                            modifier = Modifier.align(Alignment.End),
+                        ) { Text("去设置") }
                     }
                 }
             }
@@ -232,38 +261,19 @@ fun AiChatScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (entries.isEmpty()) {
-                    item { WelcomeCard(vm, onExample = { vm.input.value = it }) }
-                }
-                items(entries, key = { "${it.atEpochMs}-${it.text.hashCode()}-${it.role}" }) { e ->
-                    when (e.kind) {
-                        "plan" -> PendingBatchCard(
-                            vm = vm,
-                            batchId = e.batchId ?: return@items,
-                            onEdit = { editAction = it },
-                            onOpenEntity = onOpenEntity,
-                            busy = busyIds.contains(e.batchId),
-                        )
-
-                        "result" -> AppliedBatchCard(
-                            vm = vm,
-                            batchId = e.batchId ?: return@items,
-                            onOpenEntity = onOpenEntity,
-                            busy = busyIds.contains(e.batchId),
-                        )
-
-                        else -> MessageBubble(e)
+                // 发送/流式期间隐藏欢迎卡，避免它把流式气泡挤到屏幕外
+                if (entries.isEmpty() && sendState !is SendState.Sending) {
+                    item {
+                        WelcomeCard(onExample = { vm.input.value = it })
                     }
                 }
-                // 进程回收后仍待确认、但不在历史里的批次（兜底展示）
-                items(
-                    batches.filter { b -> entries.none { it.batchId == b.record.batchId } },
-                    key = { it.record.batchId },
-                ) { b ->
-                    PendingBatchCard(
-                        vm, b.record.batchId, onEdit = { editAction = it },
-                        onOpenEntity = onOpenEntity, busy = busyIds.contains(b.record.batchId),
-                    )
+                items(entries, key = { "${it.atEpochMs}-${it.text.hashCode()}-${it.role}" }) { e ->
+                    MessageBubble(e)
+                }
+                if (sendState is SendState.Sending && streamingReply.isNotBlank()) {
+                    item(key = "streaming-reply") {
+                        StreamingBubble(streamingReply)
+                    }
                 }
                 item {
                     // 最近一条消息的用量/警告展示
@@ -325,6 +335,7 @@ fun AiChatScreen(
                 meta = attachmentMeta,
                 pdfPages = pdfPages,
                 xlsxSheets = xlsxSheets,
+                plainMode = chatMode == AiConfig.MODE_PLAIN,
                 sending = sendState is SendState.Sending,
                 onPickImage = {
                     pickImage.launch(
@@ -349,15 +360,15 @@ fun AiChatScreen(
     if (showClearConfirm) {
         AlertDialog(
             onDismissRequest = { showClearConfirm = false },
-            title = { Text("清空对话及附件缓存？") },
+            title = { Text("清空对话？") },
             text = {
-                Text("将删除聊天记录、待确认计划与本应用缓存的所有附件副本；已保存的日程不受影响。")
+                Text("将删除聊天记录与本应用缓存的附件副本；已保存的日程不受影响。")
             },
             confirmButton = {
                 TextButton(onClick = {
                     showClearConfirm = false
                     vm.clearConversation()
-                    Toast.makeText(context, "已清空对话与附件缓存", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "已清空对话", Toast.LENGTH_SHORT).show()
                 }) { Text("清空") }
             },
             dismissButton = { TextButton(onClick = { showClearConfirm = false }) { Text("取消") } },
@@ -389,38 +400,45 @@ fun AiChatScreen(
 }
 
 @Composable
-private fun WelcomeCard(vm: AiViewModel, onExample: (String) -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
+private fun WelcomeCard(onExample: (String) -> Unit) {
+    GlassCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ChanAvatar(size = 36.dp, animate = false, contentDescription = null)
                 Column {
                     Text("你好，我是日序 AI 助手", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "聊天内容将发送到 DeepSeek 官方 API 处理",
+                        "纯文字聊天；不会创建或修改日程",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
             Text("试试这样说：", fontSize = 12.sp)
-            com.jsy.dayplan.ai.AiPrompts.exampleUserPrompts().forEach { ex ->
+            com.jsy.dayplan.ai.AiPrompts.examplePlainPrompts().forEach { ex ->
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f),
                     modifier = Modifier.clickable { onExample(ex) },
                 ) {
                     Text(ex, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
                 }
             }
             Text(
-                "也可以点输入框左侧 “+” 添加课程表截图或 PDF/表格，再告诉我要导入哪些安排。",
+                "需要安排日程时，请到首页手动新增；这里只聊天。",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
 }
+
+private fun bubbleShape(isUser: Boolean) = RoundedCornerShape(
+    topStart = 24.dp,
+    topEnd = 24.dp,
+    bottomStart = if (isUser) 24.dp else 8.dp,
+    bottomEnd = if (isUser) 8.dp else 24.dp,
+)
 
 @Composable
 private fun MessageBubble(e: ChatEntry) {
@@ -431,37 +449,81 @@ private fun MessageBubble(e: ChatEntry) {
     ) {
         if (!isUser) {
             ChanAvatar(size = 32.dp, animate = false, contentDescription = null)
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(8.dp))
         }
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = if (isUser) 12.dp else 3.dp,
-                topEnd = if (isUser) 3.dp else 12.dp,
-                bottomStart = 12.dp, bottomEnd = 12.dp,
-            ),
-            color = if (isUser) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.surfaceContainerHigh
-            },
-            modifier = Modifier.widthIn(max = 300.dp),
-        ) {
-            Column(Modifier.padding(10.dp)) {
+        val shape = bubbleShape(isUser)
+        if (isUser) {
+            Box(
+                Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(shape)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                MaterialTheme.colorScheme.primary,
+                                MaterialTheme.colorScheme.tertiary,
+                            ),
+                        ),
+                    )
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+            ) {
                 Text(
                     e.text,
                     fontSize = 14.sp,
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurface,
+                    lineHeight = 21.sp,
+                    color = MaterialTheme.colorScheme.onPrimary,
                 )
-                if (e.attachmentNames.isNotEmpty()) {
-                    Text(
-                        "附件：${e.attachmentNames.joinToString("、")}",
-                        fontSize = 10.sp,
-                        color = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+            }
+        } else {
+            Surface(
+                shape = shape,
+                color = glassCardColor(),
+                border = BorderStroke(1.dp, glassBorderColor()),
+                modifier = Modifier.widthIn(max = 300.dp),
+            ) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                    SelectionContainer {
+                        MarkdownText(
+                            e.text.ifBlank { "（这条历史消息没有内容）" },
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    if (e.attachmentNames.isNotEmpty()) {
+                        Text(
+                            "附件：${e.attachmentNames.joinToString("、")}",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StreamingBubble(text: String) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
+    ) {
+        ChanAvatar(size = 32.dp, animate = false, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Surface(
+            shape = bubbleShape(isUser = false),
+            color = glassCardColor(),
+            border = BorderStroke(1.dp, glassBorderColor()),
+            modifier = Modifier.widthIn(max = 300.dp),
+        ) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                MarkdownText(
+                    text,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text("▍", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
             }
         }
     }
@@ -516,7 +578,7 @@ private fun PendingBatchCard(
         if (rec?.applied != null) {
             AppliedBatchCard(vm, batchId, onOpenEntity, busy)
         } else {
-            Card(Modifier.fillMaxWidth()) {
+            GlassCard(Modifier.fillMaxWidth()) {
                 Text(
                     "此计划已失效（数据已恢复或对话已清空），不能继续导入；请重新发送需求。",
                     fontSize = 12.sp,
@@ -535,7 +597,7 @@ private fun PendingBatchCard(
     } else page
     val selectedCount = ui.selection.count { it.value }
 
-    Card(Modifier.fillMaxWidth()) {
+    GlassCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
@@ -737,7 +799,7 @@ private fun AppliedBatchCard(
     val appliedMap by vm.appliedRecords.collectAsState()
     val rec: BatchRecord? = appliedMap[batchId] ?: vm.appliedBatch(batchId)
     val applied = rec?.applied ?: return
-    Card(Modifier.fillMaxWidth()) {
+    GlassCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
                 "✓ 已保存 ${applied.items.size} 项" +
@@ -806,21 +868,30 @@ private fun InputBar(
     meta: Map<String, AttachMeta>,
     pdfPages: Map<String, Set<Int>>,
     xlsxSheets: Map<String, String>,
+    plainMode: Boolean,
     sending: Boolean,
     onPickImage: () -> Unit,
     onPickFile: () -> Unit,
     onOpenAttachment: (PendingAttachment) -> Unit,
 ) {
     var showAttachMenu by remember { mutableStateOf(false) }
-    Surface(color = MaterialTheme.colorScheme.surface) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .imePadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-        ) {
-            if (attachments.isEmpty() && contextAttachments.isNotEmpty()) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .imePadding()
+            .navigationBarsPadding()
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.Transparent,
+                        MaterialTheme.colorScheme.background.copy(alpha = 0.35f),
+                    ),
+                ),
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+            if (!plainMode && attachments.isEmpty() && contextAttachments.isNotEmpty()) {
                 // 澄清追问时仍引用上一轮材料；可逐项移除
                 Row(
                     Modifier.fillMaxWidth().padding(bottom = 4.dp),
@@ -849,7 +920,7 @@ private fun InputBar(
                     }
                 }
             }
-            if (attachments.isNotEmpty()) {
+            if (!plainMode && attachments.isNotEmpty()) {
                 Row(
                     Modifier.fillMaxWidth().padding(bottom = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -911,60 +982,78 @@ private fun InputBar(
                     }
                 }
             }
-            Row(verticalAlignment = Alignment.Bottom) {
-                Box {
-                    IconButton(onClick = { showAttachMenu = !showAttachMenu }) {
-                        Icon(Icons.Filled.Add, contentDescription = "添加附件")
-                    }
-                    androidx.compose.material3.DropdownMenu(
-                        showAttachMenu,
-                        onDismissRequest = { showAttachMenu = false },
-                    ) {
-                        androidx.compose.material3.DropdownMenuItem(
-                            text = { Text("相册图片（JPG/PNG/WebP）") },
-                            onClick = { showAttachMenu = false; onPickImage() },
-                        )
-                        androidx.compose.material3.DropdownMenuItem(
-                            text = { Text("文件（PDF/TXT/CSV/DOCX/XLSX）") },
-                            onClick = { showAttachMenu = false; onPickFile() },
-                        )
-                    }
-                }
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { if (it.length <= 4000) vm.input.value = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text(if (attachments.isEmpty()) "说明要导入的安排…" else "可补充要求，如“只导入我要参加的三场”") },
-                    maxLines = 4,
-                )
-                if (!sending) {
-                    IconButton(
-                        onClick = { vm.send() },
-                        enabled = input.isNotBlank() || attachments.isNotEmpty(),
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "发送",
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                } else {
-                    IconButton(onClick = { vm.cancelSend() }) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = "取消请求",
-                            tint = MaterialTheme.colorScheme.error,
-                        )
+            Surface(
+                shape = RoundedCornerShape(26.dp),
+                color = glassStrongColor(),
+                border = BorderStroke(1.dp, glassBorderColor()),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(start = 8.dp, end = 5.dp, top = 3.dp, bottom = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { if (it.length <= 4000) vm.input.value = it },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(22.dp),
+                        placeholder = { Text("想聊点什么…") },
+                        maxLines = 4,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color.Transparent,
+                            unfocusedBorderColor = Color.Transparent,
+                            disabledBorderColor = Color.Transparent,
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                        ),
+                    )
+                    val canSend = input.isNotBlank()
+                    if (!sending) {
+                        Box(
+                            Modifier
+                                .padding(end = 3.dp)
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (canSend) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f),
+                                )
+                                .clickable(enabled = canSend) { vm.send() },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "发送",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    } else {
+                        Box(
+                            Modifier
+                                .padding(end = 3.dp)
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.error.copy(alpha = 0.16f))
+                                .clickable { vm.cancelSend() },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Filled.Close,
+                                contentDescription = "取消请求",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
                 }
             }
             Text(
-                "附件在点击发送后才会通过网络发送到 DeepSeek；仅发送你选择的范围。点附件可预览/选择页或工作表。",
+                "纯聊天，不读取或修改日程。",
                 fontSize = 9.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 4.dp),
+                modifier = Modifier.padding(start = 8.dp),
             )
-        }
     }
 }
 

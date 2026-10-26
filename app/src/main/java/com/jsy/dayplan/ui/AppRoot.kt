@@ -14,15 +14,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.Event
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
@@ -43,6 +37,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
@@ -259,49 +254,27 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
         lastSaved = savedNotice,
     )
 
-    Scaffold(
-        snackbarHost = {
-            SnackbarHost(snackbar) { data ->
-                Snackbar(
-                    snackbarData = data,
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    actionColor = MaterialTheme.colorScheme.primary,
-                )
-            }
-        },
-        bottomBar = {
-            if (mainTab) {
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = current == Screen.Today,
-                        onClick = { vm.switchTab(Screen.Today) },
-                        icon = { Icon(Icons.Filled.Today, null) },
-                        label = { Text("今天") },
-                    )
-                    NavigationBarItem(
-                        selected = current == Screen.Calendar,
-                        onClick = { vm.switchTab(Screen.Calendar) },
-                        icon = { Icon(Icons.Filled.CalendarMonth, null) },
-                        label = { Text("月历") },
-                    )
-                    NavigationBarItem(
-                        selected = current == Screen.Countdowns,
-                        onClick = { vm.switchTab(Screen.Countdowns) },
-                        icon = { Icon(Icons.Filled.Event, null) },
-                        label = { Text("倒数日") },
-                    )
-                    NavigationBarItem(
-                        selected = current == Screen.Settings,
-                        onClick = { vm.switchTab(Screen.Settings) },
-                        icon = { Icon(Icons.Filled.Settings, null) },
-                        label = { Text("我的") },
+    Box(Modifier.fillMaxSize()) {
+        MacaronBackdrop()
+        Scaffold(
+            containerColor = Color.Transparent,
+            snackbarHost = {
+                SnackbarHost(snackbar) { data ->
+                    Snackbar(
+                        snackbarData = data,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        actionColor = MaterialTheme.colorScheme.primary,
                     )
                 }
-            }
-        },
-    ) { pad ->
-        Box(Modifier.fillMaxSize().padding(pad)) {
+            },
+            bottomBar = {
+                if (mainTab) {
+                    FloatingGlassNavBar(current) { vm.switchTab(it) }
+                }
+            },
+        ) { pad ->
+            Box(Modifier.fillMaxSize().padding(pad)) {
             when (current) {
                 Screen.Today -> TodayScreen(vm)
                 Screen.Calendar -> CalendarScreen(vm)
@@ -399,6 +372,7 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
             }
 
         }
+    }
     }
 }
 

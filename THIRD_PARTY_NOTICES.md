@@ -1,6 +1,6 @@
 # 第三方来源、署名和许可
 
-本仓库的主代码 MIT 许可仅覆盖维护者有权授权的代码/文档，不能替代本文件列出的素材与依赖许可。这里区分直接纳入的图片、外部库、构建工具和仅调用的在线服务。
+本仓库的主代码 MIT 许可仅覆盖维护者有权授权的代码/文档，不能替代本文件列出的素材与依赖许可。这里区分直接纳入的图片、外部库、构建工具和仅调用的在线服务；专注页背景照片另见第 2 节。
 
 ## 1. 直接纳入：DeepSeek 娘角色图片
 
@@ -18,7 +18,19 @@
 
 未移植原仓库的 Windows 桌宠、Electron/Node.js、桌宠物理/喂食代码；未纳入原参考图、Noto 字体或完整动画。开源本项目不代表获得任何第三方设计的额外商用权利。
 
-## 2. App 中使用的库
+## 2. 专注页背景照片（用户提供，来源不明）
+
+| 项目 | 记录 |
+|---|---|
+| 文件 | `app/src/main/res/drawable-nodpi/focus_canopy.jpg`、`focus_alpine.jpg`、`focus_maple.jpg`、`focus_dusk.jpg`、`focus_coast.jpg` |
+| 来源 | 维护者从小红书（Xiaohongshu）随机收集，未记录原作者、原帖链接或授权方式 |
+| 性质 | 不是本项目原创，不纳入 MIT 许可；著作权归原摄影师/作者 |
+| 使用范围 | 仅用于个人、非商业的本地 App 展示与仓库代码说明；不得用于商业发布、再销售、广告或声称原创 |
+| 处理 | 如权利人提出异议，请通过 GitHub Issues 联系，将立即删除或替换；公开或商业分发前建议替换为有授权或自摄图片 |
+
+这些照片与代码许可相互独立：即使仓库主代码采用 MIT，也不代表获得这些照片的复制、改编或商用授权。
+
+## 3. App 中使用的库
 
 | 项目 / 作者或维护组织 | 本项目版本 | 来源 | 许可 | 作用 |
 |---|---|---|---|---|
@@ -35,7 +47,7 @@
 
 Apache-2.0 完整文本、PDFBox-Android 的 LICENSE/NOTICE 和 Bouncy Castle 许可见 [third_party](third_party/README.md)。PDFBox-Android 通过 Gradle 引入，未将其整个仓库复制成本项目源码。
 
-## 3. 构建和测试工具
+## 4. 构建和测试工具
 
 | 项目 | 来源 | 许可 | 使用范围 |
 |---|---|---|---|
@@ -49,10 +61,19 @@ Apache-2.0 完整文本、PDFBox-Android 的 LICENSE/NOTICE 和 Bouncy Castle �
 
 工具链和测试环境按 Gradle 声明获取，不作为 App 业务代码声明原创，也不将其许可改成主项目 MIT。
 
-## 4. 在线服务与开发过程
+## 5. 在线服务与开发过程
 
 - 可选 DeepSeek API：[官方文档](https://api-docs.deepseek.com/)。这里只实现客户端调用，不分发模型权重、不包含公用 API Key，不代表 DeepSeek 官方背书。
 - 本项目使用 GLM、DeepSeek 辅助编码，Codex 辅助需求与独立复验；这些是开发过程说明，不将模型服务的许可冒充本 App 或角色素材的许可证。
 - 未纳入早期候选的 Microsoft Fluent Emoji 普通鲸鱼、DiceBear、Chibi Character Generator；它们不属于当前 APK 的角色资源。
 
 依赖坐标和版本见 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)，发布 APK 的完整第三方许可随完整发布包提供。
+
+## 6. 参考项目（仅参考交互，未复制代码）
+
+| 项目 | 链接 | 参考内容 |
+|---|---|---|
+| FocusTimer / luishramorim | https://github.com/luishramorim/FocusTimer | Compose 番茄钟的圆形进度、暂停继续、会话次数等交互参考；未复制代码或资源 |
+| pomodoro-tracker / Dr-klo | https://github.com/Dr-klo/pomodoro-tracker | 原生 Compose 番茄钟与本地统计的交互参考；未复制代码或资源 |
+
+以上项目不是本项目的依赖，也不代表其作者为本项目背书。

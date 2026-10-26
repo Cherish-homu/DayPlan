@@ -7,7 +7,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -41,7 +43,7 @@ data class TransportRequest(
 data class TransportResponse(val code: Int, val body: String)
 
 /** HttpURLConnection 实现：仅 HTTPS、正常证书校验、有界读取、可取消。 */
-class HttpTransport : ChatTransport {
+class HttpTransport : StreamingChatTransport {
     override suspend fun call(request: TransportRequest): TransportResponse =
         withContext(Dispatchers.IO) {
             val url = URL(request.url)
@@ -82,6 +84,86 @@ class HttpTransport : ChatTransport {
             }
         }
 
+    /** SSE 流式补全：逐行解析 data: JSON，增量回调正文。 */
+    override suspend fun stream(
+        request: TransportRequest,
+        onDelta: (String) -> Unit,
+    ): ChatResult = withContext(Dispatchers.IO) {
+        val url = URL(request.url)
+        if (!url.protocol.equals("https", ignoreCase = true)) {
+            throw AiException.Network("仅支持 HTTPS 地址")
+        }
+        val conn = url.openConnection() as HttpURLConnection
+        val cancelHandle = coroutineContext[kotlinx.coroutines.Job]
+            ?.invokeOnCompletion { conn.disconnect() }
+        try {
+            conn.requestMethod = request.method
+            conn.connectTimeout = request.connectTimeoutMs.toInt()
+            conn.readTimeout = request.readTimeoutMs.toInt()
+            conn.instanceFollowRedirects = false
+            request.headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+            conn.setRequestProperty("Accept", "text/event-stream")
+            if (request.body != null) {
+                conn.doOutput = true
+                val bytes = request.body.toByteArray(Charsets.UTF_8)
+                conn.setFixedLengthStreamingMode(bytes.size)
+                conn.outputStream.use { it.write(bytes); it.flush() }
+            }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val body = conn.errorStream?.use { readBounded(it, request.maxResponseBytes) } ?: ""
+                throw DeepSeekClient.mappedError(code, body)
+            }
+
+            val content = StringBuilder()
+            val reasoning = StringBuilder()
+            var finish = "stop"
+            var usage: ChatUsage? = null
+            var totalBytes = 0L
+            conn.inputStream.use { input ->
+                val reader = input.bufferedReader(Charsets.UTF_8)
+                while (true) {
+                    ensureActive()
+                    val line = reader.readLine() ?: break
+                    totalBytes += line.toByteArray(Charsets.UTF_8).size
+                    if (totalBytes > request.maxResponseBytes) {
+                        throw AiException.Protocol(
+                            "响应体超过 ${request.maxResponseBytes / 1024} KiB 上限",
+                        )
+                    }
+                    val trimmed = line.trimStart()
+                    if (!trimmed.startsWith("data:")) continue
+                    val data = trimmed.removePrefix("data:").trim()
+                    if (data == "[DONE]") break
+                    val chunk = SseParser.parseData(data) ?: continue
+                    chunk.error?.let {
+                        throw AiException.Server("DeepSeek 流式响应错误：$it")
+                    }
+                    chunk.delta?.takeIf { it.isNotEmpty() }?.let {
+                        content.append(it)
+                        onDelta(it)
+                    }
+                    chunk.reasoning?.takeIf { it.isNotEmpty() }?.let { reasoning.append(it) }
+                    chunk.finishReason?.let { finish = it }
+                    chunk.usage?.let { usage = it }
+                }
+            }
+            // 推理模型可能把可见内容放在 reasoning_content；至少保证返回非空正文
+            val text = content.toString().ifBlank { reasoning.toString() }
+            ChatResult(text, finish, usage)
+        } catch (e: java.net.SocketTimeoutException) {
+            throw AiException.Timeout("连接超时，请稍后重试")
+        } catch (e: javax.net.ssl.SSLException) {
+            throw AiException.Network("安全连接失败：${e.message?.take(120)}")
+        } catch (e: IOException) {
+            coroutineContext.ensureActive()
+            throw AiException.Network("网络不可用或连接中断：${e.message?.take(120)}")
+        } finally {
+            cancelHandle?.dispose()
+            conn.disconnect()
+        }
+    }
+
     companion object {
         fun readBounded(input: java.io.InputStream, maxBytes: Long): String {
             val out = java.io.ByteArrayOutputStream()
@@ -101,7 +183,8 @@ class HttpTransport : ChatTransport {
 
 /** 客户端限制（需求第 3 节）。 */
 object AiLimits {
-    const val MAX_TOKENS = 4096
+    /** 非思考模式默认 8K；4096 对 20 条动作的中文 JSON 偏小，容易截断。 */
+    const val MAX_TOKENS = 8192
     const val USER_INPUT_MAX_CHARS = 4000
     const val HISTORY_MAX_MESSAGES = 12
     const val HISTORY_MAX_CHARS = 16000
@@ -130,6 +213,67 @@ data class ChatResult(
     val usage: ChatUsage?,
 )
 
+/** SSE 一行 data 的解析结果（普通聊天流式输出）。 */
+data class SseChunk(
+    val delta: String? = null,
+    /** 部分推理模型把可见/思考文本放在 reasoning_content。 */
+    val reasoning: String? = null,
+    val finishReason: String? = null,
+    val usage: ChatUsage? = null,
+    val error: String? = null,
+)
+
+/** content 既可能是字符串，也可能是 [{type:text,text:...}] 块数组。 */
+private fun textContent(element: JsonElement?): String = when (element) {
+    null, is JsonNull -> ""
+    is JsonPrimitive -> element.contentOrNull ?: ""
+    is JsonArray -> element.joinToString("") { textContent(it) }
+    is JsonObject -> textContent(element["text"])
+}
+
+/** 解析 DeepSeek/OpenAI 兼容的 SSE data 行；无法识别时返回 null。 */
+object SseParser {
+    fun parseData(data: String): SseChunk? {
+        val trimmed = data.trim()
+        if (trimmed.isEmpty() || trimmed == "[DONE]") return null
+        return try {
+            val obj = AiProtocol.json.parseToJsonElement(trimmed).jsonObject
+            obj["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content?.let {
+                return SseChunk(error = it.take(200))
+            }
+            val choice = obj["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+            val deltaObject = choice?.get("delta")?.jsonObject
+            val content = textContent(deltaObject?.get("content"))
+            val reasoning = textContent(deltaObject?.get("reasoning_content"))
+                .ifBlank { textContent(deltaObject?.get("reasoning")) }
+            val finish = choice?.get("finish_reason")
+                ?.takeIf { it !is JsonNull }
+                ?.jsonPrimitive?.content
+            val usage = obj["usage"]?.jsonObject?.let { u ->
+                ChatUsage(
+                    u["prompt_tokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+                    u["completion_tokens"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0,
+                )
+            }
+            if (content.isBlank() && reasoning.isBlank() && finish == null && usage == null) null
+            else SseChunk(
+                delta = content.ifBlank { null },
+                reasoning = reasoning.ifBlank { null },
+                finishReason = finish,
+                usage = usage,
+            )
+        } catch (e: Exception) {
+            // 单行格式异常不应中断整条流
+            null
+        }
+    }
+}
+
+/** 支持 SSE 的传输层；普通聊天优先走流式，非流式 transport 自动回退。 */
+interface StreamingChatTransport : ChatTransport {
+    suspend fun stream(request: TransportRequest, onDelta: (String) -> Unit): ChatResult
+}
+
 /**
  * DeepSeek 官方 API 客户端（App 内运行时）。
  * POST {base}/chat/completions，Bearer 鉴权，JSON Output，非思考模式。
@@ -137,7 +281,8 @@ data class ChatResult(
 class DeepSeekClient(
     private val baseUrl: String = "https://api.deepseek.com",
     private val apiKeyProvider: () -> String?,
-    private val transport: ChatTransport,
+    transport: ChatTransport,
+    private val transportProvider: () -> ChatTransport = { transport },
 ) {
 
     private fun requireKey(): String {
@@ -151,6 +296,41 @@ class DeepSeekClient(
         "Accept" to "application/json",
     )
 
+    private fun buildCompletionBody(
+        model: String,
+        messages: List<WireMessage>,
+        jsonMode: Boolean,
+        maxTokens: Int,
+        temperature: Double,
+        stream: Boolean,
+        disableThinking: Boolean,
+    ): String = buildJsonObject {
+        put("model", model)
+        put("messages", JsonArray(messages.map { m ->
+            buildJsonObject {
+                put("role", m.role)
+                put("content", m.content)
+            }
+        }))
+        if (jsonMode) {
+            put("response_format", buildJsonObject {
+                put("type", "json_object")
+            })
+        }
+        // 规划 JSON 需要稳定输出，关闭思考；纯聊天则交给模型自然回答。
+        // 对只支持思考的模型强制 disabled 可能得到空 content，因此仅在需要时发送。
+        if (disableThinking) {
+            put("thinking", buildJsonObject { put("type", "disabled") })
+            put("reasoning_effort", "none")
+        }
+        put("max_tokens", maxTokens)
+        put("temperature", temperature)
+        put("stream", stream)
+        if (stream) {
+            put("stream_options", buildJsonObject { put("include_usage", true) })
+        }
+    }.toString()
+
     /** 非流式补全。messages 由调用方组装（含视觉 content 数组）。 */
     suspend fun complete(
         model: String,
@@ -158,40 +338,62 @@ class DeepSeekClient(
         jsonMode: Boolean,
         maxTokens: Int = AiLimits.MAX_TOKENS,
         temperature: Double = 0.3,
+        disableThinking: Boolean = true,
     ): ChatResult {
-        val body = buildJsonObject {
-            put("model", model)
-            put("messages", JsonArray(messages.map { m ->
-                buildJsonObject {
-                    put("role", m.role)
-                    put("content", m.content)
-                }
-            }))
-            if (jsonMode) {
-                put("response_format", buildJsonObject {
-                    put("type", "json_object")
-                })
-            }
-            put("thinking", buildJsonObject { put("type", "disabled") })
-            put("max_tokens", maxTokens)
-            put("temperature", temperature)
-            put("stream", false)
-        }.toString()
-
-        val resp = transport.call(
+        val resp = transportProvider().call(
             TransportRequest(
                 method = "POST",
                 url = "$baseUrl/chat/completions",
                 headers = headers(requireKey()),
-                body = body,
+                body = buildCompletionBody(
+                    model, messages, jsonMode, maxTokens, temperature,
+                    stream = false, disableThinking = disableThinking,
+                ),
             ),
         )
         if (resp.code != 200) throw mappedError(resp.code, resp.body)
         return parseCompletion(resp.body)
     }
 
+    /**
+     * 普通聊天流式补全：transport 支持 SSE 时逐块回调；
+     * 否则自动回退为非流式（一次回调完整正文）。
+     */
+    suspend fun streamComplete(
+        model: String,
+        messages: List<WireMessage>,
+        maxTokens: Int = AiLimits.MAX_TOKENS,
+        temperature: Double = 0.7,
+        onDelta: (String) -> Unit,
+    ): ChatResult {
+        val streamingRequest = TransportRequest(
+            method = "POST",
+            url = "$baseUrl/chat/completions",
+            headers = headers(requireKey()),
+            body = buildCompletionBody(
+                model, messages, jsonMode = false, maxTokens, temperature,
+                stream = true, disableThinking = false,
+            ),
+        )
+        val t = transportProvider()
+        if (t is StreamingChatTransport) return t.stream(streamingRequest, onDelta)
+
+        val resp = t.call(
+            streamingRequest.copy(
+                body = buildCompletionBody(
+                    model, messages, jsonMode = false, maxTokens, temperature,
+                    stream = false, disableThinking = false,
+                ),
+            ),
+        )
+        if (resp.code != 200) throw mappedError(resp.code, resp.body)
+        val result = parseCompletion(resp.body)
+        if (result.content.isNotEmpty()) onDelta(result.content)
+        return result
+    }
+
     suspend fun listModels(): List<ModelInfo> {
-        val resp = transport.call(
+        val resp = transportProvider().call(
             TransportRequest(
                 method = "GET",
                 url = "$baseUrl/models",
@@ -230,8 +432,10 @@ class DeepSeekClient(
             val root = AiProtocol.json.parseToJsonElement(body).jsonObject
             val choice = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
                 ?: throw AiException.Protocol("响应缺少 choices")
-            val content = choice["message"]?.jsonObject?.get("content")?.jsonPrimitive?.content
-                ?: throw AiException.Protocol("响应缺少 content")
+            val message = choice["message"]?.jsonObject
+            // content 可能是字符串或文本块数组；推理模型可能只给 reasoning_content
+            val content = textContent(message?.get("content"))
+                .ifBlank { textContent(message?.get("reasoning_content")) }
             val finish = choice["finish_reason"]?.jsonPrimitive?.content ?: "stop"
             val usage = root["usage"]?.jsonObject?.let { u ->
                 ChatUsage(

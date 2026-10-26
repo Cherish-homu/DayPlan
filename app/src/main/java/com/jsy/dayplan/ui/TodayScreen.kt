@@ -1,6 +1,15 @@
 package com.jsy.dayplan.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +32,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -37,6 +47,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
@@ -44,12 +55,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jsy.dayplan.core.TodayLogic
+import com.jsy.dayplan.core.UpcomingLogic
+import com.jsy.dayplan.core.UpcomingKind
+import com.jsy.dayplan.core.UpcomingEntry
+import com.jsy.dayplan.core.UpcomingDay
 import com.jsy.dayplan.data.CountdownEntity
 import com.jsy.dayplan.data.ScheduleEntity
 import com.jsy.dayplan.vm.PlanViewModel
 import com.jsy.dayplan.vm.Screen
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.temporal.ChronoUnit
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
 
@@ -79,12 +95,16 @@ fun TodayScreen(vm: PlanViewModel) {
     val daySchedules = TodayLogic.schedulesForToday(schedules, today)
     val focus = TodayLogic.focusSchedule(schedules, today, now)
     val topCountdowns = TodayLogic.topCountdowns(countdowns, today, limit = 12)
+    val upcoming = remember(today, schedules, todos) {
+        UpcomingLogic.build(today, schedules, todos)
+    }
     val pagePadding = pageHorizontalPadding()
     val weekday = listOf("一", "二", "三", "四", "五", "六", "日")[
         (today.dayOfWeek.value + 6) % 7
     ]
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             PageTopBar(
                 title = "今天",
@@ -141,6 +161,35 @@ fun TodayScreen(vm: PlanViewModel) {
                         today = today,
                         now = now,
                         onClick = { vm.push(Screen.EditSchedule(entity.id, null)) },
+                    )
+                }
+            } else {
+                item {
+                    EmptyHintCard(
+                        "今天还没有日程。点右上角“+日程”安排一段时间，给今天一个清晰的开始。",
+                    )
+                }
+            }
+
+            if (upcoming.isNotEmpty()) {
+                item {
+                    SectionHeader(
+                        title = "未来几天",
+                        subtitle = "明天起 7 天 · ${upcoming.sumOf { it.totalCount }} 项",
+                        actionLabel = "月历",
+                        onAction = { vm.switchTab(Screen.Calendar) },
+                    )
+                }
+                item {
+                    UpcomingCard(
+                        days = upcoming,
+                        today = today,
+                        onClick = { entry ->
+                            when (entry.kind) {
+                                UpcomingKind.SCHEDULE -> vm.push(Screen.EditSchedule(entry.id, null))
+                                UpcomingKind.TODO -> vm.push(Screen.EditTodo(entry.id))
+                            }
+                        },
                     )
                 }
             }
@@ -318,113 +367,144 @@ private fun FocusCard(
             if (overdueCount > 0) append(" · 逾期 $overdueCount 项")
         }
     }
-    val shape = MaterialTheme.shapes.large
+    val shape = RoundedCornerShape(28.dp)
+    val primary = MaterialTheme.colorScheme.primary
     Box(
         Modifier
             .fillMaxWidth()
             .padding(top = 12.dp)
-            .heightIn(min = 104.dp)
             .clip(shape)
-            .background(Brush.linearGradient(focusGradient())),
+            .background(Brush.linearGradient(focusGradient()))
+            .border(1.dp, Color.White.copy(alpha = 0.6f), shape),
     ) {
-        if (focus == null) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-            ) {
+        // 与专注页同款的装饰圆环，半透明不抢正文
+        Canvas(Modifier.matchParentSize()) {
+            val center = Offset(size.width * 0.93f, size.height * 0.48f)
+            val radius = size.width * 0.4f
+            drawCircle(
+                color = primary.copy(alpha = 0.15f),
+                radius = radius,
+                center = center,
+                style = Stroke(width = 1.5.dp.toPx()),
+            )
+            drawArc(
+                color = primary.copy(alpha = 0.22f),
+                startAngle = -110f,
+                sweepAngle = 250f,
+                useCenter = false,
+                topLeft = Offset(center.x - radius, center.y - radius),
+                size = Size(radius * 2, radius * 2),
+                style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round),
+            )
+            drawCircle(
+                color = Color.White.copy(alpha = 0.22f),
+                radius = radius * 0.62f,
+                center = Offset(size.width * 0.04f, size.height * 0.98f),
+            )
+        }
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "接下来",
                     fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                    "今天的时间由你安排",
-                    fontSize = 19.sp,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(top = 2.dp),
+                    color = primary,
                 )
                 Spacer(Modifier.weight(1f))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    shape = CircleShape,
+                    color = Color.White.copy(alpha = 0.5f),
+                ) {
                     Text(
-                        summary,
-                        fontSize = 12.sp,
-                        color = if (overdueCount > 0) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        "$scheduleCount 段安排 · ${dueTodayCount + overdueCount} 待办",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                     )
-                    TextButton(
-                        onClick = if (hasPendingTodos) onOpenTodos else onAddSchedule,
-                        contentPadding = PaddingValues(horizontal = 4.dp),
-                    ) {
+                }
+            }
+            if (focus == null) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        "今天",
+                        fontSize = 34.sp,
+                        lineHeight = 38.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "时间由你安排",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
+            } else {
+                val s = focus.schedule
+                val nowMin = now.hour * 60 + now.minute
+                val remaining = (focus.endMinute - nowMin).coerceAtLeast(0)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        if (s.allDay) "全天" else s.startTime ?: "--:--",
+                        fontSize = 32.sp,
+                        lineHeight = 36.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = primary,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            if (hasPendingTodos) "查看待办" else "安排一段时间",
-                            fontSize = 13.sp,
+                            s.title,
+                            fontSize = 18.sp,
+                            lineHeight = 22.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable { onOpen(s) },
+                        )
+                        Text(
+                            buildString {
+                                if (s.allDay) append("今天全天")
+                                else append("${s.startTime ?: ""}–${s.endTime ?: ""}")
+                                if (focus.ongoing) append(" · 进行中")
+                                else if (!s.allDay) append(" · 还剩 ${durationText(remaining)}")
+                            },
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
                         )
                     }
                 }
             }
-        } else {
-            val s = focus.schedule
-            val nowMin = now.hour * 60 + now.minute
-            val remaining = (focus.endMinute - nowMin).coerceAtLeast(0)
-            val label = when {
-                s.allDay -> "接下来 · 今天全天"
-                focus.ongoing -> "进行中 · 还剩 ${durationText(remaining)}"
-                else -> "接下来 · ${s.startTime ?: "--:--"}"
-            }
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        label,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        if (s.allDay) "全天" else "${s.startTime ?: ""}–${s.endTime ?: ""}",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    s.title,
-                    fontSize = 20.sp,
-                    lineHeight = 26.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    summary,
+                    fontSize = 12.sp,
+                    color = if (overdueCount > 0) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .padding(top = 2.dp)
-                        .clickable { onOpen(s) },
                 )
-                Spacer(Modifier.weight(1f))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.62f))
+                        .clickable { if (hasPendingTodos) onOpenTodos() else onAddSchedule() }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                ) {
                     Text(
-                        summary,
+                        if (hasPendingTodos) "查看待办" else "安排一段时间",
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
-                    if (!s.allDay) {
-                        Text(
-                            if (focus.ongoing) "还剩 ${durationText(remaining)}"
-                            else "约 ${durationText(focus.endMinute - focus.startMinute)}",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
                 }
             }
         }
@@ -455,4 +535,104 @@ private fun GroupHeading(text: String, count: Int, color: androidx.compose.ui.gr
         color = color,
         modifier = Modifier.padding(top = 8.dp, bottom = 2.dp, start = 4.dp),
     )
+}
+
+@Composable
+private fun UpcomingCard(
+    days: List<UpcomingDay>,
+    today: LocalDate,
+    onClick: (UpcomingEntry) -> Unit,
+) {
+    GlassCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            days.forEachIndexed { index, day ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = if (index == 0) 0.dp else 8.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        upcomingDayLabel(day.date, today),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${day.totalCount} 项",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                day.entries.forEach { entry ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onClick(entry) }
+                            .padding(horizontal = 6.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (entry.kind == UpcomingKind.SCHEDULE) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        todoMarkColor()
+                                    },
+                                ),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            entry.timeLabel,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            modifier = Modifier.width(96.dp),
+                        )
+                        Text(
+                            entry.title,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (entry.kind == UpcomingKind.TODO && entry.priority == 1) {
+                            Text("重要", fontSize = 10.sp, color = countdownMarkColor())
+                        }
+                    }
+                }
+                if (day.hiddenCount > 0) {
+                    Text(
+                        "另有 ${day.hiddenCount} 项，点“月历”查看",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 6.dp, bottom = 2.dp),
+                    )
+                }
+                if (index != days.lastIndex) {
+                    HorizontalDivider(
+                        Modifier.padding(vertical = 6.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun upcomingDayLabel(date: LocalDate, today: LocalDate): String {
+    val offset = ChronoUnit.DAYS.between(today, date)
+    val prefix = when (offset) {
+        1L -> "明天"
+        2L -> "后天"
+        else -> "${date.monthValue}月${date.dayOfMonth}日"
+    }
+    val weekday = listOf("一", "二", "三", "四", "五", "六", "日")[
+        (date.dayOfWeek.value + 6) % 7
+    ]
+    return "$prefix · 周$weekday"
 }

@@ -38,6 +38,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -56,6 +57,7 @@ import com.jsy.dayplan.core.CalendarTypeFilter
 import com.jsy.dayplan.core.CountdownCategory
 import com.jsy.dayplan.core.CountdownLogic
 import com.jsy.dayplan.data.CountdownEntity
+import com.jsy.dayplan.data.DayNote
 import com.jsy.dayplan.vm.PlanViewModel
 import com.jsy.dayplan.vm.Screen
 import java.time.LocalDate
@@ -81,6 +83,10 @@ fun CalendarScreen(vm: PlanViewModel) {
     var searchTitle: String by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf(CalendarTypeFilter.ALL) }
     var showAddSheet by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf<com.jsy.dayplan.data.DayNote?>(null) }
+    var showNoteEditor by remember { mutableStateOf(false) }
+    val notesRevision by vm.notesRevision.collectAsState()
+    LaunchedEffect(selected, notesRevision) { note = vm.noteFor(selected) }
 
     val now by produceState(LocalTime.now(), selected) {
         while (true) {
@@ -111,6 +117,7 @@ fun CalendarScreen(vm: PlanViewModel) {
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             PageTopBar(
                 title = "月历",
@@ -171,7 +178,9 @@ fun CalendarScreen(vm: PlanViewModel) {
                 }
             }
 
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+            GlassCard(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                Column(Modifier.padding(vertical = 10.dp)) {
+            Row(Modifier.fillMaxWidth()) {
                 listOf("一", "二", "三", "四", "五", "六", "日").forEach {
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                         Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -274,11 +283,10 @@ fun CalendarScreen(vm: PlanViewModel) {
                 LegendItem(PlanItemType.TODO, "方框=待办")
                 LegendItem(PlanItemType.COUNTDOWN, "菱形=倒数日")
             }
+                }
+            }
 
-            Card(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            ) {
+            GlassCard(Modifier.fillMaxWidth().padding(top = 12.dp)) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -384,8 +392,21 @@ fun CalendarScreen(vm: PlanViewModel) {
                     }
                 }
             }
+            DayNoteCard(note = note, onOpen = { showNoteEditor = true })
             Spacer(Modifier.height(80.dp))
         }
+    }
+
+    if (showNoteEditor) {
+        NoteEditorDialog(
+            title = "$dateLabel · 便签",
+            initial = note?.text ?: "",
+            onDismiss = { showNoteEditor = false },
+            onSave = { text ->
+                note = vm.saveNote(selected, text)
+                showNoteEditor = false
+            },
+        )
     }
 
     if (showAddSheet) {
@@ -480,3 +501,96 @@ private fun CalendarCountdownRow(
         )
     }
 }
+
+@Composable
+private fun DayNoteCard(note: DayNote?, onOpen: () -> Unit) {
+    GlassCard(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+            .clickable(onClick = onOpen),
+    ) {
+        Column(
+            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("当天便签", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (note == null) "写便签" else "编辑",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (note == null) {
+                Text(
+                    "记录这一天：心情、想法或不想忘记的小事。",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    note.text,
+                    fontSize = 14.sp,
+                    lineHeight = 21.sp,
+                    maxLines = 8,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "最近编辑 · ${noteTimeText(note.updatedAt)}",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoteEditorDialog(
+    title: String,
+    initial: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var text by remember(initial) { mutableStateOf(initial) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        if (it.length <= com.jsy.dayplan.data.DayNoteStore.MAX_CHARS) text = it
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 6,
+                    maxLines = 12,
+                    placeholder = { Text("写点什么…") },
+                )
+                Text(
+                    "${text.length}/${com.jsy.dayplan.data.DayNoteStore.MAX_CHARS}",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.End),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(text) }) { Text("保存") } },
+        dismissButton = {
+            Row {
+                if (initial.isNotBlank()) {
+                    TextButton(onClick = { text = "" }) { Text("清空") }
+                }
+                TextButton(onClick = onDismiss) { Text("取消") }
+            }
+        },
+    )
+}
+
+private fun noteTimeText(updatedAt: Long): String =
+    java.time.Instant.ofEpochMilli(updatedAt)
+        .atZone(java.time.ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("M月d日 HH:mm"))

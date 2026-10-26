@@ -44,8 +44,10 @@ class AiViewModelTest {
 
     private class Capture : ChatTransport {
         val requests = mutableListOf<TransportRequest>()
+        var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         override suspend fun call(request: TransportRequest): TransportResponse {
             requests.add(request)
+            gate?.await()
             val plan = """
                 {"schemaVersion":1,"kind":"plan","reply":"【测试】已整理","questions":[],
                  "actions":[{"clientActionId":"a1","op":"create_todo","title":"交报告","dueDate":"2099-12-30",
@@ -60,6 +62,7 @@ class AiViewModelTest {
     }
 
     private lateinit var app: DayPlanApp
+    private lateinit var testContext: android.content.Context
     private lateinit var db: PlanDb
     private lateinit var repo: PlanRepository
     private lateinit var container: AiContainer
@@ -69,12 +72,28 @@ class AiViewModelTest {
     @Before
     fun setUp() {
         app = ApplicationProvider.getApplicationContext()
+        // 等待真实 Application 的启动清理，避免它与独立的内存库争用全局会话边界。
+        val appScope = DayPlanApp::class.java.getDeclaredField("appScope").run {
+            isAccessible = true
+            get(app) as kotlinx.coroutines.CoroutineScope
+        }
+        runBlocking {
+            appScope.coroutineContext[kotlinx.coroutines.Job]?.children?.toList()?.forEach { it.join() }
+        }
+        // 每个用例使用独立的历史、附件、Key 与偏好，不能继承其他用例的材料或模式。
+        val isolated = Files.createTempDirectory("vm-ai-isolated").toFile()
+        testContext = object : android.content.ContextWrapper(app) {
+            override fun getFilesDir(): File = File(isolated, "files").apply { mkdirs() }
+            override fun getNoBackupFilesDir(): File = File(isolated, "no_backup").apply { mkdirs() }
+            override fun getSharedPreferences(name: String, mode: Int): android.content.SharedPreferences =
+                app.getSharedPreferences("$name-${isolated.name}", mode)
+        }
         db = Room.inMemoryDatabaseBuilder(app, PlanDb::class.java)
             .allowMainThreadQueries().build()
         repo = PlanRepository(db)
         val coordinator = ReminderCoordinator(db.dao(), FakeReminderScheduler())
         container = AiContainer(
-            app, repo, coordinator, FixedClock(LocalDateTime.of(2026, 10, 25, 9, 0)),
+            testContext, repo, coordinator, FixedClock(LocalDateTime.of(2026, 10, 25, 9, 0)),
             com.jsy.dayplan.ai.InMemoryKeyCipher(),
         )
         container.settings.config = container.settings.config.copy(enabled = true, autoSave = false)
@@ -148,11 +167,72 @@ class AiViewModelTest {
         assertTrue(vm.maskedKey()!!.contains("••••"))
         val before = vm.config().showWhale
         vm.saveConfig(vm.config().copy(showWhale = !before))
-        assertEquals(!before, AiSettingsStore(app).config.showWhale)
+        assertEquals(!before, AiSettingsStore(testContext).config.showWhale)
         assertTrue(vm.readiness() == com.jsy.dayplan.ai.ChatController.Readiness.READY)
     }
 
     private fun assertNotNullMasked() {
         assertTrue("已配置 Key 应有掩码", vm.maskedKey() != null)
+    }
+
+    @Test
+    fun `请求期间编辑下一条消息 成功后仍保留新草稿`() {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        capture.gate = gate
+        vm.input.value = "当前请求"
+        vm.send()
+        waitFor { capture.requests.isNotEmpty() }
+        assertTrue("state=${vm.sendState.value}; requests=${capture.requests.size}; mode=${vm.chatMode()}", vm.sending)
+        vm.input.value = "下一条尚未发送的草稿"
+        gate.complete(Unit)
+        waitFor { vm.sendState.value is SendState.Idle && vm.entries.value.isNotEmpty() }
+        assertEquals("下一条尚未发送的草稿", vm.input.value)
+        assertEquals(1, capture.requests.size)
+        assertEquals("当前请求", vm.entries.value.first { it.role == "user" }.text)
+    }
+
+    @Test
+    fun `切换模式清除上次错误 不清空输入`() {
+        vm.input.value = "保留草稿"
+        vm.sendState.value = SendState.Failed("旧模式的错误", true)
+        vm.setChatMode(com.jsy.dayplan.ai.AiConfig.MODE_PLAIN)
+        assertTrue(vm.sendState.value is SendState.Idle)
+        assertEquals("保留草稿", vm.input.value)
+        assertEquals(com.jsy.dayplan.ai.AiConfig.MODE_PLAIN, vm.chatMode())
+    }
+
+    @Test
+    fun `应用容器切换通道后 流式增量在完成前到达界面`() {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val requests = java.util.concurrent.atomic.AtomicInteger()
+        container.setTransportForTest(object : com.jsy.dayplan.ai.StreamingChatTransport {
+            override suspend fun call(request: TransportRequest): TransportResponse =
+                error("流式能力不能被容器转发层丢弃")
+
+            override suspend fun stream(
+                request: TransportRequest,
+                onDelta: (String) -> Unit,
+            ): com.jsy.dayplan.ai.ChatResult {
+                requests.incrementAndGet()
+                onDelta("正在")
+                gate.await()
+                onDelta("流式回复")
+                return com.jsy.dayplan.ai.ChatResult("正在流式回复", "stop", null)
+            }
+        })
+        vm.setChatMode(com.jsy.dayplan.ai.AiConfig.MODE_PLAIN)
+        vm.input.value = "测试流式接线"
+        vm.send()
+        waitFor { vm.streamingReply.value == "正在" }
+        assertEquals("state=${vm.sendState.value}; requests=${requests.get()}", "正在", vm.streamingReply.value)
+        assertTrue(vm.sending)
+        assertEquals(0, runBlocking { db.dao().totalItemCount() })
+        gate.complete(Unit)
+        waitFor { vm.sendState.value is SendState.Idle && vm.entries.value.size == 2 }
+        assertEquals("正在流式回复", vm.entries.value.last().text)
+        assertEquals("", vm.streamingReply.value)
+        assertEquals(1, requests.get())
+        assertTrue(vm.batches.value.isEmpty())
+        assertEquals(0, runBlocking { db.dao().totalItemCount() })
     }
 }

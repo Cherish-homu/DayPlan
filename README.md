@@ -1,69 +1,307 @@
 # 日序 · DayPlan
 
-<img src="app/src/main/res/drawable-nodpi/chan_portrait.png" alt="社区二创 DeepSeek 娘，作者 YunYueSama" width="120" align="right" />
+<img src="app/src/main/res/drawable-nodpi/chan_portrait.png" alt="社区二创助手形象，作者 YunYueSama" width="120" align="right" />
 
-一个马卡龙蓝紫日记手帐风格的 Android 日程、待办、倒数日与专注计时 App。数据保存在本机，可选接入用户自己的 DeepSeek API，通过聊天、图片和文档生成可核对的计划，再一键导入。
+一个**本地优先**的 Android 日程 / 待办 / 倒数日 / 专注 / 提醒应用。界面采用马卡龙渐变、玻璃卡片、悬浮胶囊底栏和沉浸式照片页；数据默认只保存在本机，不需要账号和服务端。AI 助手是可选功能，使用用户自己的 DeepSeek API Key。
 
-当前发布版 **v1.7.1 / versionCode 10**，包名 `com.jsy.dayplan`，最低 Android 8.0（API 26）。
+- 当前源码版本：**v1.7.7 / versionCode 16**
+- 包名：`com.jsy.dayplan`
+- 最低系统：Android 8.0（API 26）；targetSdk 34
+- 主代码许可：[MIT](LICENSE)
+- 第三方来源与素材许可：[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
-[下载安装](https://github.com/Cherish-homu/DayPlan/releases) · [使用说明](docs/使用说明.md) · [构建与测试](docs/BUILDING.md) · [来源与致谢](THIRD_PARTY_NOTICES.md)
+> **版权提示（请先阅读）**
+>
+> 本仓库的 **MIT 许可只覆盖维护者有权授权的代码**，不覆盖角色立绘、专注页背景照片或第三方依赖。
+> 右侧助手角色来自 YunYueSama 的社区二创，遵守其自定义署名许可；专注页五张背景照片由维护者从小红书随机收集，**原作者、原帖和授权方式均不明**，仅限个人非商业使用，不随代码进入 MIT。
+> 公开分发、商用或二次创作前，请自行取得素材权利人的授权，或替换为自摄/已授权素材。权利人如有异议，请通过 GitHub Issues 联系，会立即删除或替换相关内容。
 
-## 功能
+---
 
-- 今天、月历、倒数日、我的四页；日程、待办、重要日子及本地提醒。
-- 专注倒计时；今日安排与倒数日桌面小组件。
-- 马卡龙蓝紫/浅色/深色主题；本地 JSON 备份、恢复前快照与回退。
-- App 内 DeepSeek 娘聊天入口，用户自行配置 API Key。
-- 文字、JPG/PNG/WebP、PDF、DOCX、XLSX、TXT/Markdown、CSV 联合整理安排；文档先在手机本地提取内容，扫描 PDF 按页转图片。
-- 计划先预览，可勾选和编辑、检查来源与冲突、批量导入及撤销。附件批次始终先确认；可选自动保存明确且无冲突的纯文字新增。
-- Room 事务保存与持久批次去重；恢复后旧请求、草稿及撤销失效；自动保存事务内检查最新日历。
+## 一、项目定位
 
-## 下载和使用
+日序不是云同步工具，也不是商业日程 SaaS，而是一个个人自用、可离线运行的“时间手帐”：
 
-从 [Releases](https://github.com/Cherish-homu/DayPlan/releases) 下载完整发布包（APK、校验值和第三方许可）。发布 APK 使用维护者私有签名，仓库不包含签名密钥。
+- 日程、待办、倒数日、完成状态、专注记录、月历便签都在本机。
+- 无广告、无统计 SDK、无账号体系、无强制登录。
+- 不依赖网络即可完成日程管理、提醒、专注、备份和恢复。
+- AI 助手可选；不配置 Key 时，所有离线功能照常使用。
 
-AI 为可选功能。手动日程等离线功能不需要 Key；启用 AI 后，在“我的 → AI 助手设置”填写自己的 DeepSeek API Key。发送的文字及选定附件内容会传给 DeepSeek，调用由自己的 API 账户计费；编程工具赠送额度不等于手机 App API 额度。
+界面希望把“专注页”的沉浸感延伸到全 App：柔和渐变背景、半透明玻璃卡片、超大标题、圆环装饰、悬浮底栏，同时保留马卡龙蓝紫配色。
 
-**真实 API 识别质量与实体手机尚未完成验证。** 当前验证覆盖合成材料、本地解析、Mock 端到端、真实请求体结构和模拟器；先用一条测试日程验证预览、导入、提醒和撤销。
+---
 
-## 开发和验证
+## 二、功能模块
 
-Kotlin 2.0.20、Jetpack Compose / Material 3、Room 2.6.1、Coroutines/Serialization。构建使用 JDK 17、Android SDK 34、Gradle Wrapper 8.9 和 AGP 8.5.2。
+### 1. 今天（首页）
 
-```sh
-./gradlew :app:testReleaseUnitTest :app:assembleDebug
+- **接下来**：优先显示正在进行或下一段定时日程；没有日程时显示“今天的时间由你安排”和待办摘要。
+- **今日日程**：按时间流展示今天的日程，标注进行中/已结束，点击编辑。
+- **未来几天**：明天起 7 天内的新开始日程与未完成待办，按天分组；每项可点进编辑，超出每日展示上限会提示去月历查看。
+- **今日待办**：分为已逾期、今日截止、未来、未定日期、已完成；完成框直接勾选，逾期用短标签提示。
+- **重要日子**：首页横向倒数日卡片，置顶优先、临近优先。
+- **悬浮助手**：右下角小模块，点开可聊天；长按隐藏，在设置中恢复。它不是底栏，也不占整行空间。
+
+### 2. 日程
+
+- 标题、开始/结束日期、是否全天、开始/结束时间、类别、地点、备注。
+- 支持跨日与多日日程；时间流按开始日期/时间排序，全天排最前。
+- 可设置提前 0/15/30/60/120 分钟提醒。
+- 保存前给出时间冲突轻提示，不阻止用户保存。
+- 跨日日程在首页和月历中按“今天可见时段”展示，避免把跨日时间误读成当天时刻。
+
+### 3. 待办
+
+- 标题、可选截止日期、可选具体截止时间、优先级、备注。
+- 完成/取消完成，保留完成时间；已完成默认折叠。
+- 首页按“已逾期 / 今日截止 / 未来 / 未定日期 / 已完成”分组。
+- 设置具体截止时间后，在该时间触发提醒。
+- 与日程一样使用本地 Room 数据和真实实体 ID，不生成临时 ID。
+
+### 4. 倒数日
+
+- 目标日期、类别（考试/截止/生日/纪念日/其他）、置顶、每年重复、备注。
+- 可设置提前天数与提醒时间；年度重复自动计算下一次发生日。
+- 首页和“倒数日”页展示剩余/已过天数；过去的目标仍可回看。
+- 提醒使用真实发生日，不用“目标日 09:00”冒充所有提醒时间。
+
+### 5. 月历
+
+- 月份切换、回到今天、类型筛选（全部/日程/待办/倒数日）、标题搜索。
+- 日历格用不同形状标记类型：短线=日程、方框=待办、菱形=倒数日；同时保留颜色冗余。
+- 选中日期后展示当天日程、待办、倒数日，并可从该日期直接新增（日期自动预填）。
+- **当天便签**：为选中日期写一段类似日记的文字，支持查看、编辑、清空；按日期保存在本地独立数据库 `day_notes.db`。便签暂不进入手动 JSON 备份。
+
+### 6. 专注（番茄钟）
+
+- 五张用户提供的全幅照片背景：花树、山湖、红枫、日落、海岸；可切换。
+- 可调背景虚化与暗色遮罩，保证大号计时数字清晰。
+- 快捷 5/15/25/45 分钟，自定义 1–180 分钟；开始、暂停、继续、结束。
+- 圆环倒计时、大字号时间、今日/累计次数与分钟、最近完成记录。
+- 使用单调时钟计时；后台通过 AlarmManager 注册结束提醒；重启后暂停并如实提示，不用系统时间推算。
+- 每轮有唯一 token，旧回调不能结束新一轮；完成记录用轮次 ID 去重。
+- **背景白噪音**：关闭/细雨/海浪/白噪音，本地连续合成，不联网、不下载音频；可调音量。
+- 音效由前台媒体服务播放，锁屏/后台继续；通知栏可关闭声音；暂停/重置/结束停止播放。
+- 专注记录保存在独立 `focus_sessions.db`，不影响日程 Room schema 与实体 ID。
+
+### 7. 提醒与闹钟
+
+- 日程、待办、倒数日到点提醒；使用 AlarmManager，开机/改时间/改时区/应用升级后重新协调。
+- 通知栏提醒带标题、正文和点击进入对应条目；提醒通道为高重要性。
+- **到点全屏弹窗**：通知携带 full-screen intent；应用未打开或锁屏时，系统允许则拉起“大肥鱼”提醒页。
+  - 显示大肥鱼立绘、提醒标题/时间、`关闭闹钟`、`查看详情`。
+  - 点关闭/返回：停止闹钟音乐、释放音频焦点与唤醒锁、清除通知。
+- **自定义闹钟音乐**：默认系统闹钟声；也可以从系统文件选择器选本地音频，URI 持久化，仅用于提醒弹窗，弹窗关闭即停止。
+- **预览**：设置页可预览弹窗与当前闹钟音乐，不必等真实提醒。
+- 需要通知权限；Android 14 还需要系统允许全屏通知，设置页会显示状态和授权入口。
+- 说明：这里的“闹钟”绑定日程/待办/倒数日的提醒时间，**没有单独的“每天几点响”闹钟时钟页**。
+
+### 8. AI 助手（可选）
+
+- 当前是**单一纯聊天**：没有“日程助手/普通聊天”模式切换，也不会自动切换模式。
+- 纯聊天不读取、不修改日程/待办/倒数日，不生成可保存草稿；需要安排日程时到首页手动新增。
+- 流式回复；空回复会自动重试，并改用一次非流式完整请求；连续为空时写入一条本地可读提示，聊天里不会出现空白气泡。
+- 可兼容返回 `content` 字符串、文本块数组或 `reasoning_content` 的模型响应。
+- 使用用户自己的 DeepSeek API Key；Key 只保存在本机加密存储，不进入仓库、日志、聊天记录或 JSON 备份。
+- 不内置公用 Key、不代理、不转售 API；调用费用由用户自己的 DeepSeek 账户承担。
+- 演示（Mock）通道只在 debug 变体可用；release 包不包含 Mock 实现。
+
+### 9. 备份与恢复
+
+- 手动导出完整业务 JSON：日程、待办、倒数日；导出后由用户自行保管，不上传。
+- 恢复前先预览与校验，确认后在同一批操作中替换；恢复前自动生成本机快照，可回退。
+- 保留原始实体 ID、版本、完成时间、提醒字段等；恢复后重新协调提醒。
+- 兼容旧版备份字段；备份不含设备权限、通知投递标记、小组件绑定、AI Key、聊天记录、专注记录和月历便签。
+- 数据恢复/快照回退会让旧的 AI 请求、草稿和撤销失效。
+
+### 10. 桌面小组件
+
+- “今日安排”小组件：展示今天的日程/待办摘要，数据变化后刷新。
+- “重要日子”小组件：展示倒计时卡片，可配置目标。
+- 小组件使用本机数据，不联网、不登录。
+
+### 11. 我的 / 设置
+
+- 主题：浅色 / 深色 / 跟随系统；全 App 共享马卡龙渐变、玻璃卡片和悬浮底栏。
+- 助手显示与动画：显示/隐藏悬浮助手，完整/减少/跟随系统动画。
+- 提醒：通知状态、精确提醒授权、修复提醒、测试通知。
+- 提醒弹窗与闹钟：全屏弹窗开关、系统闹钟声/自定义音乐、预览。
+- 备份与恢复、关于、素材许可与署名。
+- 所有设置只影响本机；换机需要重新配置 Key 和权限。
+
+---
+
+## 三、技术架构
+
+```text
+app/src/main/java/com/jsy/dayplan/
+├── ui/         Compose 页面、主题、玻璃卡片、悬浮导航、专注页、AI 聊天
+├── vm/         PlanViewModel / AiViewModel / FocusTimerViewModel
+├── core/       日程/待办/倒数日/提醒时间/专注状态机/白噪音/未来几天逻辑
+├── data/       Room 数据库与仓库、专注记录、月历便签
+├── reminder/   AlarmManager、通知、全屏提醒页、前台音效服务
+├── ai/         可选 DeepSeek 客户端、协议、提示词、批次执行器
+├── backup/     JSON 备份、校验、恢复与快照
+└── widget/     桌面小组件
 ```
 
-Windows 使用 `gradlew.bat`。SDK 路径按本机设置，首次构建需要下载依赖，详见 [BUILDING.md](docs/BUILDING.md)。
+- Kotlin 2.0.20；Jetpack Compose（BOM 2024.09.03）/ Material 3；Room 2.6.1；Coroutines 1.8.1；kotlinx.serialization 1.7.3。
+- 单 Activity + Compose 屏幕栈；ViewModel + Repository；业务数据在 Room 中事务提交。
+- 专注记录、月历便签使用独立 SQLite 数据库，避免改动既有业务 schema。
+- 提醒使用 `AlarmManager`（单调时钟优先，精确闹钟不可用时降级），前台音效使用媒体播放前台服务。
+- 无后端、无账号、无广告 SDK、无统计分析。
 
-v1.7.1 在 Windows / Android 14 模拟器环境已验证：
+### 数据位置（应用私有目录）
 
-| 验证 | 结果 |
+| 数据 | 位置 | 是否进 JSON 备份 |
+|---|---|---|
+| 日程 / 待办 / 倒数日 | Room `dayplan.db` | 是 |
+| 专注完成记录 | `focus_sessions.db` | 否 |
+| 月历便签 | `day_notes.db` | 否 |
+| AI Key | 本机加密存储 | 否 |
+| AI 聊天记录 / 草稿 / 附件缓存 | 应用私有 `files/ai/` | 否 |
+| 恢复前快照 | 应用私有目录 | 否（可单独导出） |
+| 设置 | SharedPreferences | 否 |
+
+---
+
+## 四、构建与测试
+
+环境：
+
+- JDK 17
+- Android SDK 34（build-tools 34.0.0）
+- Gradle Wrapper 8.9 / AGP 8.5.2 / Kotlin 2.0.20
+
+```sh
+# Windows
+gradlew.bat :app:testReleaseUnitTest --offline --no-daemon
+gradlew.bat :app:assembleDebug --offline --no-daemon
+gradlew.bat :app:assembleRelease --offline --no-daemon
+
+# macOS / Linux
+./gradlew :app:testReleaseUnitTest --offline --no-daemon
+```
+
+- 仓库不包含 `keystore.properties`、签名 keystore、`local.properties`、构建产物或 APK。
+- Release 签名由维护者私有 keystore 完成；自行构建请配置自己的签名。
+- 如无本地 Gradle 缓存，去掉 `--offline` 让 Gradle 下载依赖。
+- 更多说明见 [docs/BUILDING.md](docs/BUILDING.md)，依赖版本见 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)。
+
+### 验证状态
+
+- 1.7.7 源码在 JDK 17 / Android SDK 34 / 模拟器 Android 14 环境完成 **258 项单元与 Robolectric/Room 测试，0 失败、0 跳过**。
+- 模拟器覆盖安装验证：owner 数据 4 条日程、2 条待办、2 个倒数日，实体 ID 不变。
+- 手工验证：浅/深色、360dp × 1.3 字体、首页未来几天、月历便签、专注计时/统计/白噪音、AI Mock 单聊、全屏提醒页、自定义 WAV 闹钟音乐、关闭闹钟停止音频。
+- **未验证**：真实 DeepSeek API 的空回复场景、实体手机的锁屏全屏通知与真实闹钟时序、实体机扬声器/蓝牙试听。真实模型输出和 ROM 行为可能不同。
+
+---
+
+## 五、版权、许可与开源来源
+
+### 1. 主代码
+
+除非另有说明，维护者有权授权的代码和文档采用 [MIT License](LICENSE)，Copyright (c) 2026 Cherish-homu。
+
+MIT 只覆盖代码，不覆盖下列第三方素材、图片、角色设计、字体、依赖或在线服务。
+
+### 2. 助手角色立绘（不是 MIT）
+
+| 项目 | 记录 |
 |---|---|
-| 正式单元与 Robolectric / Room 测试 | 185/185 |
-| 同签名覆盖升级、旧数据/快照保留 | 模拟器通过 |
-| 360/411dp × 字号 1.0/1.3 × 浅/深色；月历筛选/日期继承；助手三状态 | 模拟器通过 |
-| 真实模型识别、实体手机、真实拔电 | 未验证 |
+| 作者 | **YunYueSama** |
+| 原仓库 | https://github.com/YunYueSama/codex-deepseek-pet |
+| 固定 commit | `7661c8b304c5400701f91da01b1a643a207331de` |
+| 原文件 | `assets/whale/portrait.png`、`assets/whale/idle-front.png` |
+| 本项目文件 | `chan_portrait.png`、`chan_head.png`、`chan_idle_open.png`、`chan_idle_blink.png`、`chan_head_open.png`、`chan_head_blink.png` |
+| 修改 | 切出睁眼/闭眼帧，按透明包围盒裁切、缩放，适配呼吸/眨眼/出现/展开动效；未重绘、未改色 |
+| 许可 | 自定义“大肥鱼项目署名许可 1.0”，**不是 MIT** |
 
-v1.5 时代的外部探针代码与可移植执行入口仍保留在 [verification](verification/README.md)；本轮没有重跑这些探针。当前源码对应 v1.7.1，验证摘要见 [发布前核对](docs/VALIDATION.md)。
+完整条款与上游边界见 [third_party/deepseek-chan](third_party/deepseek-chan/README.md)。该形象是社区二创，不是 DeepSeek 官方产品形象，本项目与 DeepSeek 官方无隶属关系。
 
-## 来源和许可证
+### 3. 专注页背景照片（来源不明，未获授权）
 
-本仓库由本地日序工程整理发布。开发过程使用 GLM、DeepSeek 辅助编码，Codex 辅助需求整理与独立复验；维护和发布由 [Cherish-homu](https://github.com/Cherish-homu) 负责。
+| 项目 | 记录 |
+|---|---|
+| 文件 | `app/src/main/res/drawable-nodpi/focus_canopy.jpg`、`focus_alpine.jpg`、`focus_maple.jpg`、`focus_dusk.jpg`、`focus_coast.jpg` |
+| 来源 | 维护者从小红书（Xiaohongshu）随机收集，未记录原作者、原帖链接或授权方式 |
+| 性质 | **不是本项目原创，不进入 MIT 许可**；著作权归原摄影师/作者 |
+| 允许范围 | 仅用于个人、非商业的本地 App 展示与仓库代码说明 |
+| 禁止 | 商业发布、再销售、广告、声称原创或把图片单独打包分发 |
+| 处理 | 权利人如有异议，请通过 GitHub Issues 联系，会立即删除或替换；公开/商业分发前建议替换为有授权或自摄图片 |
 
-**右侧悬浮助手角色素材不是本项目原创，也不是 DeepSeek 官方授权形象：**
+这五张照片是当前 App 的默认/可选专注背景。仓库公开只为代码学习与个人使用；**开源本项目不代表获得这些照片的商用授权**。
 
-- 作者：[YunYueSama](https://github.com/YunYueSama)。
-- 原仓库：[codex-deepseek-pet](https://github.com/YunYueSama/codex-deepseek-pet)，固定 commit `7661c8b304c5400701f91da01b1a643a207331de`。
-- 采用 `assets/whale/portrait.png` 与 `idle-front.png`；从 idle-front 左右两帧切出睁眼/闭眼，按共同包围盒裁切、缩放，并适配呼吸/眨眼/出现/收起展开动效；未改色、未重新绘制角色。
-- 素材遵守自定义“大肥鱼项目署名许可 1.0”，**不随主代码改成 MIT**；完整条款和第三方参考边界见 [third_party/deepseek-chan](third_party/deepseek-chan/README.md)。
-- 本 App 没有移植原仓库的 Windows 桌宠程序、Electron/Node.js、物理/喂食系统、参考原图或字体，也不需要电脑端运行。
+### 4. 参考项目（仅交互参考，未复制代码）
 
-主项目中维护者有权授权的代码采用 [MIT](LICENSE)。第三方图片、依赖与构建工具分别遵守各自许可，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 [DEPENDENCIES.md](docs/DEPENDENCIES.md)。本项目与 DeepSeek、素材作者及依赖维护者无隶属或官方背书关系。
+| 项目 | 链接 | 参考内容 |
+|---|---|---|
+| FocusTimer / luishramorim | https://github.com/luishramorim/FocusTimer | Compose 番茄钟的圆形进度、暂停继续、会话次数等交互 |
+| pomodoro-tracker / Dr-klo | https://github.com/Dr-klo/pomodoro-tracker | 原生 Compose 番茄钟与本地统计的交互 |
 
-## 当前限制
+本项目没有把上述项目作为依赖，也没有复制其代码或资源；仅参考常见番茄钟交互后，用现有工程的原生 Compose 计时逻辑重新实现。其作者不对本项目背书。
 
-- 真实模型可能识别错误，模糊日期/课表周次先澄清，导入前核对具体日期和提醒。
-- 附件续聊保留最近一轮材料集，最多 6 个附件；XLSX 可选工作表，暂不提供行范围选择。
-- 不支持旧 DOC/XLS、加密文档及无限重复日程；DOCX/XLSX 内嵌图片须单独发送。
-- API Key、私有签名、用户数据库/备份、聊天、缓存及开发机审计日志均不在仓库内。测试文件是合成样本。
+### 5. 第三方依赖
+
+主要依赖与许可（完整版本、链接和许可文本见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)）：
+
+| 依赖 | 许可 | 用途 |
+|---|---|---|
+| AndroidX Compose / Material3 / Material Icons | Apache-2.0 | 原生界面与图标 |
+| AndroidX Room | Apache-2.0 | 本地 SQLite 数据与事务 |
+| AndroidX Activity / Lifecycle / Navigation / Core | Apache-2.0 | 系统组件、生命周期、导航 |
+| Kotlin / kotlinx.coroutines / kotlinx.serialization | Apache-2.0 | 语言、协程、JSON |
+| PDFBox-Android / Apache PDFBox | Apache-2.0 | PDF 文本提取（解析依赖仍在 APK 中） |
+| AndroidX ExifInterface | Apache-2.0 | 图片方向 |
+| JUnit / Robolectric / AndroidX Test | EPL-1.0 / MIT / Apache-2.0 | 仅测试 |
+
+Apache-2.0 文本、PDFBox-Android 的 LICENSE/NOTICE、Bouncy Castle 许可等见 [third_party](third_party/README.md)。
+
+### 6. 在线服务与 AI 开发说明
+
+- 可选 DeepSeek API：https://api-docs.deepseek.com/ 。本项目只实现客户端调用，不包含模型权重、公用 Key 或服务端代理，不代表 DeepSeek 官方背书；使用须遵守 DeepSeek 的服务条款。
+- 开发过程使用 GLM、DeepSeek 辅助编码，Codex 辅助需求整理与独立复验。这些是开发过程披露，不改变任何第三方素材/依赖的许可，也不把模型服务许可冒充为本项目许可。
+
+### 7. 原创与侵权处理
+
+- 业务逻辑、界面结构、测试用例为在本项目内编写；第三方代码只通过依赖坐标引入，未把外部仓库整体复制为本项目源码。
+- 如发现遗漏的署名、许可或疑似侵权内容，请通过 [GitHub Issues](https://github.com/Cherish-homu/DayPlan/issues) 指出，会核实并删除/替换。
+- 请勿将本项目直接用于商业发布，除非你已自行取得角色、照片、依赖和 API 的相应授权。
+
+---
+
+## 六、隐私与权限
+
+- 不收集账号、位置、通讯录、麦克风或广告标识；无统计分析 SDK。
+- 业务数据默认只在本机应用私有目录；卸载或清除数据会删除本机数据，请先导出备份。
+- 可选 AI 功能只在你主动发送时，把聊天文字发送到 DeepSeek；当前单聊不读取/修改日程，也不接收附件。API Key 保存在本机加密存储。
+- 权限用途：
+  - 通知：日程/待办/倒数日提醒、专注结束、背景音通知。
+  - 精确闹钟：尽量准时触发提醒；不允许时降级并如实提示。
+  - 全屏通知：到点拉起大肥鱼提醒页；不允许时退回普通通知。
+  - 唤醒锁：提醒页播放闹钟音乐期间保持工作。
+  - 网络：仅可选 DeepSeek API 使用。
+
+---
+
+## 七、已知限制
+
+- 真实 DeepSeek API 的模型差异、空回复、限流和计费以官方服务为准；本项目已做重试、非流式兜底和本地兜底，但不能保证外部服务始终可用。
+- 全屏提醒依赖系统通知权限、全屏通知授权和 ROM 行为；部分设备可能只显示通知横幅。
+- 月历便签、专注记录目前不进入手动 JSON 备份；换机/清数据前请自行留存。
+- 没有独立闹钟时钟页；提醒时间由日程/待办/倒数日决定。
+- 不支持云同步、跨设备账号、Web 端或 iOS。
+- 专注背景照片的版权状态见上；公开/商业使用前请替换为有授权素材。
+
+---
+
+## 八、致谢
+
+- 助手角色素材作者：[YunYueSama](https://github.com/YunYueSama/codex-deepseek-pet)。
+- 交互参考：[luishramorim/FocusTimer](https://github.com/luishramorim/FocusTimer)、[Dr-klo/pomodoro-tracker](https://github.com/Dr-klo/pomodoro-tracker)。
+- AndroidX、Kotlin、Room、Compose、PDFBox-Android、Robolectric 等开源项目及贡献者。
+- 可选 AI 服务：DeepSeek 官方 API。
+
+## 九、免责声明
+
+本项目为个人自用与学习项目，按“现状”提供，不承诺适销性或特定用途适用性。日程、提醒、备份和专注记录请自行核对并保留多重备份；因误删、漏提醒、设备限制、第三方 API 或素材权利问题造成的损失，维护者不承担超出 MIT 许可范围的责任。

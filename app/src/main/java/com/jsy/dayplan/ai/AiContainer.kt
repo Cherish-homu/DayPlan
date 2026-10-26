@@ -31,10 +31,9 @@ class AiContainer(
 
     val client: DeepSeekClient = DeepSeekClient(
         apiKeyProvider = { keyStore.loadApiKey() },
-        transport = object : ChatTransport {
-            override suspend fun call(request: TransportRequest): TransportResponse =
-                transport.call(request)
-        },
+        transport = transport,
+        // 每次请求取得当前通道，保留 StreamingChatTransport 的能力与 Mock 切换。
+        transportProvider = { transport },
     )
 
     private val baseDir = File(context.filesDir, "ai")

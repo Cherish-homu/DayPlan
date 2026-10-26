@@ -1,6 +1,18 @@
 package com.jsy.dayplan.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import com.jsy.dayplan.reminder.ReminderAlarmActivity
+import com.jsy.dayplan.reminder.ReminderAlarmPrefs
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.filled.Alarm
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
+import android.provider.Settings
+import android.provider.OpenableColumns
+import android.os.Build
+import android.net.Uri
+import android.content.Intent
+import android.app.NotificationManager
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -92,6 +104,25 @@ fun SettingsScreen(
     val missed by vm.missedCount.collectAsState()
     var expanded by remember { mutableStateOf<String?>(null) }
     var showLicense by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val alarmPrefs = remember { ReminderAlarmPrefs(context) }
+    var popupEnabled by remember { mutableStateOf(alarmPrefs.popupEnabled) }
+    var alarmSoundName by remember { mutableStateOf(alarmPrefs.soundName) }
+    val pickAlarmSound = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            val name = queryAudioName(context, uri) ?: "自定义音乐"
+            alarmPrefs.saveSound(uri.toString(), name)
+            alarmSoundName = name
+        }
+    }
+    val fullScreenAllowed = if (Build.VERSION.SDK_INT >= 34) {
+        context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+    } else true
 
     LaunchedEffect(Unit) {
         vm.refreshReminderStatus()
@@ -112,6 +143,7 @@ fun SettingsScreen(
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             PageTopBar(
                 title = "我的",
@@ -244,6 +276,86 @@ fun SettingsScreen(
             }
 
             SettingsGroup(
+                icon = Icons.Filled.Alarm,
+                iconTint = MaterialTheme.colorScheme.tertiary,
+                title = "提醒弹窗与闹钟",
+                summary = if (popupEnabled) "全屏提醒 · $alarmSoundName" else "全屏提醒已关闭",
+                expanded = expanded == "alarm",
+                onToggle = { expanded = if (expanded == "alarm") null else "alarm" },
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("到点全屏弹出", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "日程、待办、倒数日到点时，大肥鱼会带着提醒出现；未打开应用也会尝试弹出。",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = popupEnabled,
+                        onCheckedChange = {
+                            popupEnabled = it
+                            alarmPrefs.popupEnabled = it
+                        },
+                    )
+                }
+                Text(
+                    "闹钟音乐：$alarmSoundName",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { pickAlarmSound.launch(arrayOf("audio/*")) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("选择音乐") }
+                    OutlinedButton(
+                        onClick = {
+                            alarmPrefs.clearSound()
+                            alarmSoundName = alarmPrefs.soundName
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("系统闹钟声") }
+                }
+                Text(
+                    "音乐只在提醒弹窗打开期间循环播放；点“关闭闹钟”立即停止。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = {
+                        context.startActivity(ReminderAlarmActivity.previewIntent(context))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("预览提醒弹窗与闹钟音乐") }
+                if (Build.VERSION.SDK_INT >= 34 && !fullScreenAllowed) {
+                    Text(
+                        "系统尚未允许全屏通知，到点可能只显示横幅。",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            context.startActivity(
+                                Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
+                                    .setData(Uri.parse("package:${context.packageName}")),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("允许全屏通知") }
+                }
+                if (!notifEnabled) {
+                    Text(
+                        "通知未开启，全屏提醒不会出现。",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    TextButton(onClick = onRequestNotification) { Text("开启通知") }
+                }
+            }
+
+            SettingsGroup(
                 icon = Icons.Filled.Backup,
                 iconTint = todoMarkColor(),
                 title = "备份与恢复",
@@ -296,7 +408,7 @@ fun SettingsScreen(
                 icon = Icons.Filled.Info,
                 iconTint = countdownMarkColor(),
                 title = "关于",
-                summary = "日序 v1.7.1 · 本地离线 · 无账号",
+                summary = "日序 v1.7.7 · 本地离线 · 无账号",
                 expanded = expanded == "about",
                 onToggle = { expanded = if (expanded == "about") null else "about" },
             ) {
@@ -316,7 +428,7 @@ fun SettingsScreen(
             }
 
             Text(
-                "日序 v1.7.1 · 数据保存在应用私有目录",
+                "日序 v1.7.7 · 数据保存在应用私有目录",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, bottom = 80.dp),
@@ -339,10 +451,7 @@ private fun SettingsGroup(
     onToggle: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Card(
-        Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    ) {
+    GlassCard(Modifier.fillMaxWidth()) {
         Column {
             Row(
                 Modifier
@@ -403,3 +512,10 @@ private fun StatusLine(label: String, value: String, ok: Boolean) {
         )
     }
 }
+
+private fun queryAudioName(context: android.content.Context, uri: Uri): String? =
+    runCatching {
+        context.contentResolver.query(
+            uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null,
+        )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    }.getOrNull()

@@ -109,13 +109,19 @@ object AiPrompts {
         attachmentMode: Boolean,
     ): String = buildString {
         appendLine("你是“日序”App 内置的日程规划助手。用户用中文对话，你负责把自然语言和附件内容整理为日程/待办/倒数日草稿。")
+        appendLine("【当前应用模式】当前始终是“日程助手”模式，由用户在界面选择；你不能自动切换模式。即使只是闲聊，也仍然处于“日程助手”模式。历史回复中的模式自述可能有误，以本条设置为准。")
+        appendLine("用户询问当前模式时，明确回答“当前是日程助手模式”；不要说“现在是聊天模式”，不要声称遇到安排时会自动切换模式。")
         appendLine(nowLine(clock))
         appendLine()
-        appendLine("【输出要求】必须且只能输出一个 json 对象（不要 markdown 代码块），结构：")
-        appendLine("""{"schemaVersion":1,"kind":"chat|clarify|plan","reply":"简短中文说明","questions":["需要澄清时的问题"],"actions":[动作数组]}""")
+        appendLine("【输出要求】必须且只能输出一个 json 对象（不要 markdown 代码块、前后解释或空行）。示例骨架（以 chat 为例）：")
+        appendLine("""{"schemaVersion":1,"kind":"chat","reply":"简短中文说明","questions":[],"actions":[]}""")
+        appendLine("kind 只能是 chat / clarify / plan 三者之一；plan 时把动作数组放进 actions。")
+        appendLine("kind 仅表示本轮回复类型：chat=文字回答，clarify=需要澄清，plan=安排草稿；kind=chat 不代表应用切到了“普通聊天”模式。")
+        appendLine("reply 必须是中文说明且不能为空；禁止输出 {}、空对象、纯空白，或只有 actions 没有 reply 的响应。")
         appendLine("kind 规则：普通聊天/解释/查询/假设（“如果…会怎样”）/否定（“先别安排”“今天不要提醒我”）一律 kind=chat 且 actions 为空，不得写库；")
         appendLine("时间或目标含糊、需要用户确认时 kind=clarify 并把问题放进 questions，actions 为空；")
         appendLine("只有得到明确、可执行的安排时才 kind=plan 并给出 actions（最多 ${AiProtocol.PAGE_SIZE} 条，超出请说明剩余部分下次再整理）。")
+        appendLine("即使用户只是打招呼或闲聊，也必须返回非空 reply（kind=chat）。")
         appendLine()
         appendLine("【动作类型】create_schedule / create_todo / create_countdown / update_schedule / update_todo / update_countdown。")
         appendLine("日程字段：title,startDate,endDate(yyyy-MM-dd),allDay,startTime,endTime(HH:mm),category(0学习1工作2生活3其他),remindMinutesBefore(0=不提醒,15/30/60/120=提前分钟),location,note。")
@@ -152,9 +158,39 @@ object AiPrompts {
             appendLine("（用户关闭了“参考现有安排”：不要假设已有日程；需要修改目标时请 clarify 让用户先在设置中开启该开关或手动编辑。）")
         }
         appendLine()
-        appendLine("示例：用户说“明天上午九点到十点读文献，提前十五分钟提醒”，若当前时间是 2026-10-25，则输出")
-        appendLine("""{"schemaVersion":1,"kind":"plan","reply":"已整理 1 条日程。","questions":[],"actions":[{"clientActionId":"a1","op":"create_schedule","title":"读文献","startDate":"2026-10-26","endDate":"2026-10-26","allDay":false,"startTime":"09:00","endTime":"10:00","category":0,"remindMinutesBefore":15}]}（实际日期按当前时间重新计算）""")
+        appendLine("示例：用户说“明天上午九点到十点读文献，提前十五分钟提醒”，若当前时间是 2026-10-25，则输出（实际日期按当前时间重新计算）：")
+        appendLine("""{"schemaVersion":1,"kind":"plan","reply":"已整理 1 条日程。","questions":[],"actions":[{"clientActionId":"a1","op":"create_schedule","title":"读文献","startDate":"2026-10-26","endDate":"2026-10-26","allDay":false,"startTime":"09:00","endTime":"10:00","category":0,"remindMinutesBefore":15}]}""")
     }.trimEnd()
+
+    /** 纯聊天系统提示：不要求 JSON、不写库、不发送本地日程数据。 */
+    fun buildPlainSystemPrompt(clock: AppClock): String = buildString {
+        appendLine("你是“日序”App 内置的 AI 助手，可以用中文自然聊天。")
+        appendLine(nowLine(clock))
+        appendLine("回答直接、简洁、有帮助；可以讨论日程、学习、工作、生活等话题，也可以解释概念或帮忙润色文字。")
+        appendLine("你只做文字聊天：不要输出 JSON，不要声称已经创建、修改或删除任何日程/待办/倒数日，也不要假装调用工具。")
+        appendLine("不要讨论“模式”，不要把自己称为日程助手或普通聊天模式，也不要声称会自动切换；用户问起时，直接说明你只负责聊天，不能改日程。")
+        appendLine("不要编造用户没有提供的个人信息；不确定时直接说明。")
+        appendLine("可以使用简单的 Markdown（**粗体**、`行内代码`、短列表），但不要输出大段代码或表格。")
+    }.trimEnd()
+
+    /** 纯聊天空回复时的纠正提示（不要求 JSON）。 */
+    const val PLAIN_RETRY_CORRECTION =
+        "上一次回复为空。请直接用中文自然回答用户的问题，不要再要求 JSON，也不要输出空消息。"
+
+    fun examplePlainPrompts(): List<String> = listOf(
+        "用一句话解释一下什么是机会成本",
+        "帮我把这句话改得更简洁：我明天可能大概应该会去图书馆",
+        "推荐三个适合周末放松的方式",
+    )
+
+    /**
+     * 空内容/非法 JSON 后的纠正提示。DeepSeek JSON Output 偶发空 content，
+     * 重试时去掉 response_format 并追加这段约束，仍要求只输出一个非空 JSON 对象。
+     */
+    const val RETRY_CORRECTION =
+        "上一次响应为空或不是合法的单个 JSON 对象。请重新回答：只输出一个 JSON 对象，不要 markdown 代码块；" +
+            "必须包含 schemaVersion=1、kind（chat/clarify/plan 之一）和非空 reply；" +
+            "纯聊天时 kind=chat、actions=[]；不要输出空对象。"
 
     fun exampleUserPrompts(): List<String> = listOf(
         "明天上午九点到十点读文献，提前十五分钟提醒",

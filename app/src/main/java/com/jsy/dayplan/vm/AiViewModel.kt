@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jsy.dayplan.DayPlanApp
 import com.jsy.dayplan.ai.ActionReview
+import com.jsy.dayplan.ai.AiConfig
 import com.jsy.dayplan.ai.AiException
 import com.jsy.dayplan.ai.AiSettingsStore
 import com.jsy.dayplan.ai.ApplyOutcome
@@ -26,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -85,6 +87,8 @@ class AiViewModel @JvmOverloads constructor(
     val sendState = MutableStateFlow<SendState>(SendState.Idle)
     /** 最近一次真实本地写入成功的数量；仅用于角色“已保存N项”反馈，不参与业务判断。 */
     val lastSavedNotice = MutableStateFlow<Int?>(null)
+    /** 普通聊天流式正文：仅 UI 临时展示，成功后才写入历史。 */
+    val streamingReply = MutableStateFlow("")
     val configVersion = MutableStateFlow(0) // 设置变化后自增，驱动界面刷新
 
     private var sendJob: Job? = null
@@ -118,22 +122,27 @@ class AiViewModel @JvmOverloads constructor(
             val applied = commits.associate { c ->
                 c.batchId to ai.executor.recordFromCommit(c, ai.batchStore.load(c.batchId))
             }
-            val list = ai.batchStore.all()
-                .filter {
-                    it.sessionId == session &&
-                        it.dataGeneration == generation &&
-                        it.isPending &&
-                        !commitById.containsKey(it.batchId)
-                }
-                .sortedBy { it.createdAtEpochMs }
-                .map { rec ->
-                    val reviews = ai.executor.review(rec, ctx)
-                    UiBatch(
-                        record = rec,
-                        reviews = reviews,
-                        selection = defaultSelection(reviews),
-                    )
-                }
+            val list = if (ai.settings.config.chatMode == com.jsy.dayplan.ai.AiConfig.MODE_PLAIN) {
+                // 单一纯聊天不再展示历史待确认草稿，避免出现无法操作的旧计划卡。
+                emptyList()
+            } else {
+                ai.batchStore.all()
+                    .filter {
+                        it.sessionId == session &&
+                            it.dataGeneration == generation &&
+                            it.isPending &&
+                            !commitById.containsKey(it.batchId)
+                    }
+                    .sortedBy { it.createdAtEpochMs }
+                    .map { rec ->
+                        val reviews = ai.executor.review(rec, ctx)
+                        UiBatch(
+                            record = rec,
+                            reviews = reviews,
+                            selection = defaultSelection(reviews),
+                        )
+                    }
+            }
             val context = ai.controller.contextAttachments()
             withContext(Dispatchers.Main) {
                 _entries.value = entries
@@ -156,6 +165,26 @@ class AiViewModel @JvmOverloads constructor(
 
     fun saveConfig(c: com.jsy.dayplan.ai.AiConfig) {
         ai.settings.config = c
+        configVersion.value += 1
+    }
+
+    fun chatMode(): String = ai.settings.config.chatMode
+
+    /** 切换聊天模式；普通聊天不使用附件，切换时清理已选附件。 */
+    fun setChatMode(mode: String) {
+        if (sending) return
+        val normalized = AiConfig.normalizedChatMode(mode)
+        if (normalized == ai.settings.config.chatMode) return
+        if (normalized == AiConfig.MODE_PLAIN) {
+            attachments.value.forEach { ai.attachmentStore.delete(it.id) }
+            attachments.value = emptyList()
+            attachmentMeta.value = emptyMap()
+            pdfPages.value = emptyMap()
+            xlsxSheets.value = emptyMap()
+        }
+        streamingReply.value = ""
+        sendState.value = SendState.Idle
+        ai.settings.config = ai.settings.config.copy(chatMode = normalized)
         configVersion.value += 1
     }
 
@@ -306,44 +335,69 @@ class AiViewModel @JvmOverloads constructor(
     fun send() {
         if (sending) return
         lastSavedNotice.value = null
+        streamingReply.value = ""
         val text = input.value.trim()
         val atts = attachments.value
+        val plain = ai.settings.config.chatMode == AiConfig.MODE_PLAIN
         if (text.isEmpty() && atts.isEmpty()) return
-        sendState.value = SendState.Sending(0, atts.size, if (atts.isEmpty()) "发送中…" else "准备附件…")
+        if (plain && atts.isNotEmpty()) {
+            sendState.value = SendState.Failed(
+                "普通聊天模式不使用附件；请切换到“日程助手”再发送附件", false,
+            )
+            return
+        }
+        sendState.value = SendState.Sending(
+            0, atts.size,
+            when {
+                plain -> "正在回复…"
+                atts.isEmpty() -> "发送中…"
+                else -> "准备附件…"
+            },
+        )
         sendJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val turn = ai.controller.send(
                     text,
                     atts,
                     AttachmentOptions(pdfPages.value, xlsxSheets.value),
+                    onDelta = { delta -> streamingReply.update { it + delta } },
                 ) { stage ->
                     sendState.value = SendState.Sending(0, atts.size, stage)
                 }
                 withContext(Dispatchers.Main) {
-                    input.value = ""
+                    // 请求中仍可起草下一条消息；只清空本次已发送的文字。
+                    if (input.value.trim() == text) input.value = ""
                     attachments.value = emptyList()
                     attachmentMeta.value = emptyMap()
                     pdfPages.value = emptyMap()
                     xlsxSheets.value = emptyMap()
+                    streamingReply.value = ""
                     sendState.value = SendState.Idle
                     reload()
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 withContext(Dispatchers.Main) {
+                    streamingReply.value = ""
                     sendState.value = SendState.Idle
                 }
                 throw e
             } catch (e: AiException.Cancelled) {
                 withContext(Dispatchers.Main) {
+                    streamingReply.value = ""
                     sendState.value = SendState.Failed(e.message ?: "已取消", false)
                     reload()
                 }
             } catch (e: AiException) {
                 withContext(Dispatchers.Main) {
-                    sendState.value = SendState.Failed(friendlyError(e), retryable = e !is AiException.NotConfigured && e !is AiException.Capability)
+                    streamingReply.value = ""
+                    sendState.value = SendState.Failed(
+                        friendlyError(e),
+                        retryable = e !is AiException.NotConfigured && e !is AiException.Capability,
+                    )
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
+                    streamingReply.value = ""
                     sendState.value = SendState.Failed("发送失败：${e.message ?: "未知错误"}", true)
                 }
             }
@@ -352,6 +406,7 @@ class AiViewModel @JvmOverloads constructor(
 
     fun cancelSend() {
         sendJob?.cancel()
+        streamingReply.value = ""
         sendState.value = SendState.Idle
     }
 
@@ -476,6 +531,7 @@ class AiViewModel @JvmOverloads constructor(
                 contextAttachments.value = emptyList()
                 appliedRecords.value = emptyMap()
                 lastSavedNotice.value = null
+                streamingReply.value = ""
                 reload()
             }
         }

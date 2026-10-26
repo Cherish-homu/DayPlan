@@ -125,6 +125,64 @@ class AiCoreTest {
         assertTrue(e.message!!.contains("不是合法 JSON"))
     }
 
+    @Test
+    fun `markdown 代码块与前后说明中的 JSON 可提取`() {
+        val fenced = """
+            这是整理结果：
+            ```json
+            {"schemaVersion":1,"kind":"chat","reply":"你好"}
+            ```
+            请确认。
+        """.trimIndent()
+        assertEquals(
+            """{"schemaVersion":1,"kind":"chat","reply":"你好"}""",
+            AiProtocol.extractJsonObject(fenced),
+        )
+        assertEquals("chat", AiProtocol.parseResponse(fenced).kind)
+        assertEquals("你好", AiProtocol.parseResponse(fenced).reply)
+
+        val quoted = kotlinx.serialization.json.JsonPrimitive(
+            """{"schemaVersion":1,"kind":"chat","reply":"包了一层"}""",
+        ).toString()
+        assertEquals("包了一层", AiProtocol.parseResponse(quoted).reply)
+
+        assertNull(
+            "数组响应不能只截取第一个对象，否则会静默丢掉其余动作",
+            AiProtocol.extractJsonObject("""[{"schemaVersion":1,"kind":"chat","reply":"a"}]"""),
+        )
+    }
+
+    @Test
+    fun `系统提示的 JSON 骨架合法且要求非空 reply`() {
+        val prompt = AiPrompts.buildSystemPrompt(
+            FixedClock(LocalDateTime.of(2026, 10, 25, 9, 0)),
+            AiConfig(),
+            "busy",
+            "existing",
+            attachmentMode = false,
+        )
+        assertFalse("模板不能再用 [动作数组] 占位导致非法 JSON", prompt.contains("[动作数组]"))
+        assertFalse(prompt.contains("chat|clarify|plan"))
+        assertTrue(prompt.contains("\"kind\":\"chat\""))
+        assertTrue(prompt.contains("reply 必须是中文说明且不能为空"))
+        assertTrue(prompt.contains("禁止输出 {}"))
+        assertTrue(prompt.contains("json"))
+        val example = prompt.lineSequence()
+            .first { it.startsWith("{") && it.contains("\"kind\":\"plan\"") }
+        assertEquals("plan", AiProtocol.parseResponse(example).kind)
+    }
+
+    @Test
+    fun `纯聊天提示不含 JSON 协议`() {
+        val prompt = AiPrompts.buildPlainSystemPrompt(
+            FixedClock(LocalDateTime.of(2026, 10, 25, 9, 0)),
+        )
+        assertTrue(prompt.contains("文字聊天"))
+        assertTrue(prompt.contains("不要输出 JSON"))
+        assertFalse(prompt.contains("schemaVersion"))
+        assertFalse(prompt.contains("action"))
+    }
+
     // ---------- DeepSeek 请求与错误映射 ----------
 
     @Test
@@ -153,6 +211,8 @@ class AiCoreTest {
         assertEquals("deepseek-flash", body["model"]!!.jsonPrimitive.content)
         assertEquals("json_object", body["response_format"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("disabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("none", body["reasoning_effort"]!!.jsonPrimitive.content)
+        assertEquals(8192, AiLimits.MAX_TOKENS)
         assertEquals(AiLimits.MAX_TOKENS, body["max_tokens"]!!.jsonPrimitive.content.toInt())
         assertEquals("false", body["stream"]!!.jsonPrimitive.content)
         assertEquals(2, body["messages"]!!.jsonArray.size)

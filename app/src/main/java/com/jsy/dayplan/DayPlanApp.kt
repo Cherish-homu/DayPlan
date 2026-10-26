@@ -101,6 +101,8 @@ class DayPlanApp : Application() {
 
     // ---------- 专注倒计时持久化（单调时钟 + bootId） ----------
     private val timerPrefs by lazy { getSharedPreferences("focus_timer", MODE_PRIVATE) }
+    val focusSessions by lazy { com.jsy.dayplan.data.FocusSessionStore(this) }
+    val dayNotes by lazy { com.jsy.dayplan.data.DayNoteStore(this) }
 
     fun loadTimerState(): FocusTimerLogic.State {
         val j = timerPrefs.getString("state", null) ?: return FocusTimerLogic.State.IDLE
@@ -152,6 +154,16 @@ class DayPlanApp : Application() {
         val s = loadTimerState()
         if (!s.running || s.paused || s.endNotified) return false
         if (FocusAlarms.tokenOf(s) != token) return false
+        // 先写唯一轮次的完成记录，再标记状态；中途进程退出后重试也不会重复计数。
+        // 账本写入失败不能卡住计时器：仍结束本轮，只是这一次不计入统计。
+        val lateMs = (clock.elapsedRealtimeMs() - s.deadlineElapsedMs).coerceAtLeast(0)
+        try {
+            focusSessions.record(com.jsy.dayplan.data.FocusSession(
+                token, s.durationMinutes, (System.currentTimeMillis() - lateMs).coerceAtLeast(0),
+            ))
+        } catch (e: Exception) {
+            android.util.Log.w("DayPlanApp", "focus session record failed: ${e.javaClass.simpleName}")
+        }
         saveTimerState(
             s.copy(
                 running = false,
@@ -161,6 +173,7 @@ class DayPlanApp : Application() {
                 lastKnownRemainingMs = 0,
             ),
         )
+        com.jsy.dayplan.reminder.FocusSoundService.stop(this)
         return true
     }
 

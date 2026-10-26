@@ -15,6 +15,7 @@ import java.io.File
 import java.time.LocalDate
 import java.util.UUID
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -28,6 +29,13 @@ data class ChatTurn(
     val applied: AppliedRecord?,
     val warnings: List<String>,
     val totalActions: Int,
+)
+
+/** 一次成功可用的模型响应（含是否降级为纯文字）。 */
+private data class ParsedAttempt(
+    val result: ChatResult,
+    val response: AiPlanResponse,
+    val fallbackWarning: String? = null,
 )
 
 /**
@@ -69,12 +77,28 @@ class ChatController(
         rawText: String,
         attachments: List<PendingAttachment> = emptyList(),
         options: AttachmentOptions = AttachmentOptions(),
+        onDelta: ((String) -> Unit)? = null,
         onStage: ((String) -> Unit)? = null,
     ): ChatTurn {
         val config = settings.config
         val key = keyStore.loadApiKey()
         if (!config.enabled || key == null) {
             throw AiException.NotConfigured("请先在“AI 助手设置”中启用助手并填写 API Key")
+        }
+        if (attachments.isEmpty() && AiModeIdentity.isModeQuestion(rawText)) {
+            val (generation, sessionId) = executor.currentBoundary()
+            val now = nowProvider()
+            val user = ChatEntry("user", rawText.trim(), now, mode = config.chatMode)
+            val assistant = ChatEntry("assistant", AiModeIdentity.reply(config), now, mode = config.chatMode)
+            ensureBoundary(sessionId, generation)
+            history.append(listOf(user, assistant))
+            return ChatTurn(user, assistant, null, emptyList(), null, emptyList(), 0)
+        }
+        if (config.chatMode == AiConfig.MODE_PLAIN) {
+            if (attachments.isNotEmpty()) {
+                throw AiException.Protocol("普通聊天模式不使用附件；请切换到“日程助手”再发送附件")
+            }
+            return sendPlain(rawText, onDelta, onStage)
         }
         val text = AiPrompts.clampUserInput(rawText.trim())
         // DB ai_epoch 是权威；恢复已提交而偏好尚未更新时不能继续用旧偏好世代
@@ -145,7 +169,8 @@ class ChatController(
             clock, config, busy, existing, attachmentMode = materials.isNotEmpty(),
         )
         val priorMessages = AiPrompts.trimHistory(
-            history.load().map { it.role to it.text }.filter { it.second.isNotBlank() },
+            history.load().filter { it.mode == AiConfig.MODE_PLANNER }
+                .map { it.role to it.text }.filter { it.second.isNotBlank() },
         )
         val userContent = buildUserContent(text, composed)
 
@@ -156,33 +181,10 @@ class ChatController(
         }
 
         // 5) 调用（非流式；取消经由 transport 的 ensureActive 传播）
-        val result = client.complete(model, messages, jsonMode = true)
-
-        // 会话/数据世代在请求期间变化 → 丢弃结果，不写任何东西。
-        // 同时看持久边界与本地缓存：恢复可能已提交 DB 而偏好尚未同步，或调用方已 bump。
-        if (settings.chatSessionId != sessionId || settings.dataGeneration != generationAtSend) {
-            throw AiException.Cancelled("对话已清空或数据已恢复/替换，本次结果已丢弃")
-        }
-        val afterResponse = executor.currentBoundary()
-        if (afterResponse.second != sessionId) {
-            throw AiException.Cancelled("对话已被清空，本次结果已丢弃")
-        }
-        if (afterResponse.first != generationAtSend) {
-            throw AiException.Cancelled("数据已恢复/替换，恢复前的请求结果已丢弃")
-        }
-        if (result.finishReason == "length") {
-            throw AiException.Protocol("模型输出被截断（超出 max_tokens），请减少一次发送的内容后重试")
-        }
-        if (result.content.isBlank()) {
-            throw AiException.Protocol("模型返回了空内容，请重试或换一种问法")
-        }
-        val response = AiProtocol.parseResponse(result.content)
-        if (response.schemaVersion !in 0..AiProtocol.SCHEMA_VERSION) {
-            throw AiException.Protocol("不支持的协议版本：${response.schemaVersion}")
-        }
-        if (response.kind !in setOf("chat", "clarify", "plan")) {
-            throw AiException.Protocol("模型返回未知的 kind：${response.kind}")
-        }
+        // DeepSeek JSON Output 偶发空 content；首次空/非法 JSON 时去掉 response_format 重试一次。
+        val attempt = requestWithRecovery(model, messages, sessionId, generationAtSend, onStage)
+        val result = attempt.result
+        val response = attempt.response
         val usageLine = result.usage?.display() ?: ""
 
         // 动作身份在进入批次前校验；空/重复 ID 的批次会被本地审查判无效，
@@ -217,6 +219,10 @@ class ChatController(
                     if (isNotEmpty()) append("\n")
                     append("⚠ $w")
                 }
+                attempt.fallbackWarning?.let { w ->
+                    if (isNotEmpty()) append("\n")
+                    append("⚠ $w")
+                }
             }
             val assistantEntry = ChatEntry(
                 role = "assistant", text = replyText,
@@ -232,6 +238,7 @@ class ChatController(
         val chunks = response.actions.chunked(AiProtocol.PAGE_SIZE)
         val origin = if (materials.isEmpty()) "text" else "attachment"
         val warnings = mutableListOf<String>()
+        attempt.fallbackWarning?.let { warnings.add(it) }
         warnings.addAll(composed?.warnings ?: emptyList())
         if (stored != null && materials.isNotEmpty()) {
             warnings.add("本轮继续参考此前附件：${materials.joinToString("、") { it.fileName }}；如不再需要可在输入区移除")
@@ -321,6 +328,223 @@ class ChatController(
             userEntry, assistantEntry, batch.batchId, reviews, applied, warnings,
             totalActions = response.actions.size,
         )
+    }
+
+    /**
+     * 纯聊天：不要求 JSON、流式回传正文、不读取本地日程、不生成批次。
+     * 空回复最多重试两次；仍为空时写入一条本地兜底提示，聊天里不会出现空白回复。
+     */
+    private suspend fun sendPlain(
+        rawText: String,
+        onDelta: ((String) -> Unit)?,
+        onStage: ((String) -> Unit)?,
+    ): ChatTurn {
+        val text = AiPrompts.clampUserInput(rawText.trim())
+        if (text.isEmpty()) throw AiException.Protocol("请输入内容")
+        val config = settings.config
+        val model = config.model
+        val (generation, sessionId) = executor.currentBoundary()
+        val system = AiPrompts.buildPlainSystemPrompt(clock)
+        val prior = AiPrompts.trimHistory(
+            // 两种模式分别续聊，避免把日程/附件历史带入普通聊天；界面历史仍完整保留。
+            history.load().filter { it.mode == AiConfig.MODE_PLAIN }
+                .map { it.role to it.text }.filter { it.second.isNotBlank() },
+        )
+        val messages = buildList {
+            add(WireMessage.text("system", system))
+            prior.forEach { (role, t) -> add(WireMessage.text(role, t)) }
+            add(WireMessage.text("user", text))
+        }
+
+        onStage?.invoke("正在回复…")
+        var result = client.streamComplete(
+            model,
+            messages,
+            onDelta = { delta -> onDelta?.invoke(delta) },
+        )
+        ensureBoundary(sessionId, generation)
+        finishError(result)?.let { throw it }
+        var retries = 0
+        while (result.content.isBlank() && retries < 2) {
+            retries++
+            onStage?.invoke(
+                if (retries == 1) "这次回复为空，正在重试…" else "仍在重试（$retries/2）…",
+            )
+            result = client.streamComplete(
+                model,
+                withPlainRetryCorrection(messages),
+                onDelta = { delta -> onDelta?.invoke(delta) },
+            )
+            ensureBoundary(sessionId, generation)
+            finishError(result)?.let { throw it }
+        }
+        // 流式连续为空时改用非流式完整响应；很多兼容层只在非流式里给出正文。
+        if (result.content.isBlank()) {
+            onStage?.invoke("正在改用普通连接重试…")
+            val nonStreaming = client.complete(
+                model,
+                messages,
+                jsonMode = false,
+                temperature = 0.7,
+                disableThinking = false,
+            )
+            ensureBoundary(sessionId, generation)
+            finishError(nonStreaming)?.let { throw it }
+            if (nonStreaming.content.isNotBlank()) {
+                onDelta?.invoke(nonStreaming.content)
+                result = nonStreaming
+            }
+        }
+        // 所有通道都为空时用本地兜底，保证聊天里始终有一条可读回复。
+        val content = result.content.trim().ifBlank {
+            "这次没有收到模型的有效内容。你可以再发一次，或换个说法，我会继续。"
+        }
+
+        val nowMs = nowProvider()
+        val userEntry = ChatEntry(
+            role = "user",
+            text = text,
+            atEpochMs = nowMs,
+            mode = AiConfig.MODE_PLAIN,
+        )
+        val assistantEntry = ChatEntry(
+            role = "assistant",
+            text = content,
+            atEpochMs = nowMs,
+            kind = "text",
+            usageLine = result.usage?.display() ?: "",
+            mode = AiConfig.MODE_PLAIN,
+        )
+        history.append(listOf(userEntry, assistantEntry))
+        return ChatTurn(userEntry, assistantEntry, null, emptyList(), null, emptyList(), 0)
+    }
+
+    /**
+     * DeepSeek JSON Output 偶发返回空 content。首次空/非法 JSON 时去掉
+     * response_format 并追加纠正提示重试一次；仍失败才向用户报错，绝不写库。
+     */
+    private suspend fun requestWithRecovery(
+        model: String,
+        messages: List<WireMessage>,
+        sessionId: String,
+        generation: Int,
+        onStage: ((String) -> Unit)?,
+    ): ParsedAttempt {
+        val first = client.complete(model, messages, jsonMode = true)
+        ensureBoundary(sessionId, generation)
+
+        val firstFinish = finishError(first)
+        if (firstFinish != null && first.finishReason !in RETRYABLE_FINISH) throw firstFinish
+        if (firstFinish == null && first.content.isNotBlank()) {
+            val parsed = runCatching { AiProtocol.parseResponse(first.content) }.getOrNull()
+            if (parsed != null) {
+                normalizeResponse(parsed)?.let { return ParsedAttempt(first, it.first, it.second) }
+            }
+        }
+
+        onStage?.invoke("DeepSeek 返回内容异常，正在重试一次…")
+        val second = client.complete(model, withRetryCorrection(messages), jsonMode = false)
+        ensureBoundary(sessionId, generation)
+
+        finishError(second)?.let { throw it }
+        if (second.content.isBlank()) {
+            throw AiException.Protocol(
+                "DeepSeek 连续返回空内容（JSON Output 偶发问题），本次未写入；请再次发送或稍后重试。",
+            )
+        }
+        val parsed = runCatching { AiProtocol.parseResponse(second.content) }.getOrNull()
+        if (parsed != null) {
+            val normalized = normalizeResponse(parsed)
+                ?: throw AiException.Protocol(
+                    "DeepSeek 返回了空回复，本次未写入；请重试或换一种问法。",
+                )
+            return ParsedAttempt(second, normalized.first, normalized.second)
+        }
+        // 第二次仍不是 JSON：按普通聊天显示；绝不据此写入任何日程/待办。
+        return ParsedAttempt(
+            second,
+            AiPlanResponse(kind = "chat", reply = second.content.trim()),
+            "AI 未按 JSON 格式返回，已按普通文字显示，未生成任何草稿。",
+        )
+    }
+
+    /** 请求期间清空对话/恢复数据/替换世代 → 丢弃结果，不重试、不写库。 */
+    private suspend fun ensureBoundary(sessionId: String, generation: Int) {
+        if (settings.chatSessionId != sessionId || settings.dataGeneration != generation) {
+            throw AiException.Cancelled("对话已清空或数据已恢复/替换，本次结果已丢弃")
+        }
+        val after = executor.currentBoundary()
+        if (after.second != sessionId) {
+            throw AiException.Cancelled("对话已被清空，本次结果已丢弃")
+        }
+        if (after.first != generation) {
+            throw AiException.Cancelled("数据已恢复/替换，恢复前的请求结果已丢弃")
+        }
+    }
+
+    private fun finishError(result: ChatResult): AiException? = when (result.finishReason) {
+        "length" -> AiException.Protocol(
+            "模型输出被截断（超出 max_tokens），请减少一次发送的内容或拆成多批后重试",
+        )
+        "content_filter" -> AiException.Protocol("模型输出被安全策略过滤，请调整表述后重试")
+        "tool_calls" -> AiException.Protocol("模型请求了未提供的工具，请重试")
+        "insufficient_system_resource" -> AiException.Server("DeepSeek 推理资源不足，请稍后重试")
+        "aborted" -> AiException.Server("生成过程被中断，请重试")
+        else -> null
+    }
+
+    /**
+     * 规范化模型响应：空对象/空 reply 返回 null 以便重试；
+     * 只含文字但 kind 是模板占位符时降级为 chat，绝不生成动作。
+     */
+    private fun normalizeResponse(
+        response: AiPlanResponse,
+    ): Pair<AiPlanResponse, String?>? {
+        if (response.schemaVersion !in 0..AiProtocol.SCHEMA_VERSION) {
+            throw AiException.Protocol("不支持的协议版本：${response.schemaVersion}")
+        }
+        if (response.kind == "plan") {
+            if (response.actions.isNotEmpty()) return response to null
+            return if (response.reply.isNotBlank() || response.questions.isNotEmpty()) {
+                response.copy(kind = "chat") to null
+            } else null
+        }
+        if (response.kind == "clarify" || response.kind == "chat") {
+            return if (response.reply.isNotBlank() || response.questions.isNotEmpty()) {
+                response to null
+            } else null
+        }
+        if (response.actions.isNotEmpty()) {
+            throw AiException.Protocol("模型返回未知的 kind：${response.kind}")
+        }
+        return if (response.reply.isNotBlank() || response.questions.isNotEmpty()) {
+            response.copy(kind = "chat") to
+                "AI 返回了未知的 kind（${response.kind.take(40)}），已按普通聊天显示，未生成草稿。"
+        } else null
+    }
+
+    /** 把纠正提示合并进原 system 消息，避免出现多条 system 或打断已有历史。 */
+    private fun withRetryCorrection(messages: List<WireMessage>): List<WireMessage> {
+        val first = messages.firstOrNull() ?: return messages
+        val original = (first.content as? JsonPrimitive)?.content
+        if (first.role != "system" || original == null) {
+            return listOf(WireMessage.text("system", AiPrompts.RETRY_CORRECTION)) + messages
+        }
+        return listOf(
+            WireMessage.text("system", original + "\n\n" + AiPrompts.RETRY_CORRECTION),
+        ) + messages.drop(1)
+    }
+
+    /** 普通聊天的空回复纠正提示（不要求 JSON）。 */
+    private fun withPlainRetryCorrection(messages: List<WireMessage>): List<WireMessage> {
+        val first = messages.firstOrNull() ?: return messages
+        val original = (first.content as? JsonPrimitive)?.content
+        if (first.role != "system" || original == null) {
+            return listOf(WireMessage.text("system", AiPrompts.PLAIN_RETRY_CORRECTION)) + messages
+        }
+        return listOf(
+            WireMessage.text("system", original + "\n\n" + AiPrompts.PLAIN_RETRY_CORRECTION),
+        ) + messages.drop(1)
     }
 
     /** 唯一允许的静默行为：无。用户选了纯文本模型时给可读错误，让用户在设置切换。 */
@@ -507,6 +731,9 @@ class ChatController(
     }
 
     companion object {
+        /** 服务端资源不足/生成中断：可以安全重试一次。 */
+        private val RETRYABLE_FINISH = setOf("insufficient_system_resource", "aborted")
+
         /** 视觉 content 数组构造（供测试检查 image_url 块）。 */
         fun countImageBlocks(content: kotlinx.serialization.json.JsonElement): Int =
             (content as? JsonArray)?.count { el ->

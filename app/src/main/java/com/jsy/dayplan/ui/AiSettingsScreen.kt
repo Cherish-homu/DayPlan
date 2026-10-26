@@ -28,6 +28,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -36,15 +37,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jsy.dayplan.ai.AiConfig
-import com.jsy.dayplan.core.PlanRules
 import com.jsy.dayplan.vm.AiViewModel
 
 /**
- * AI 助手设置：Key（加密、掩码、可清除）、连接测试、模型与图片能力、
- * 自动保存、规划偏好、入口显示与素材署名。
+ * AI 助手设置：Key（加密、掩码、可清除）、连接测试、模型、入口显示与素材署名。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,16 +60,27 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
     var showClearConfirm by remember { mutableStateOf(false) }
     var showLicense by remember { mutableStateOf(false) }
 
-    var durationText by remember(version) { mutableStateOf(cfg.defaultDurationMinutes.toString()) }
-    var windowStart by remember(version) { mutableStateOf(cfg.planWindowStart) }
-    var windowEnd by remember(version) { mutableStateOf(cfg.planWindowEnd) }
-
     fun update(next: AiConfig) = vm.saveConfig(next)
+
+    fun runConnectionTest() {
+        testing = true
+        testMsg = "正在连接…"
+        vm.testConnection { ok, msg ->
+            testing = false
+            testMsg = (if (ok) "✓ " else "✗ ") + msg
+        }
+    }
+
     val models = remember(version) { vm.availableModels() }
 
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    scrolledContainerColor = Color.Transparent,
+                ),
                 title = { Text("AI 助手设置") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -84,7 +95,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             // 启用与说明
-            Card(Modifier.fillMaxWidth()) {
+            GlassCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -102,9 +113,8 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                     }
                     Text(
                         "使用你本人的 DeepSeek API Key 直连官方服务（https://api.deepseek.com）。" +
-                            "点击发送时，本次聊天文字与所选附件（图片、文档提取文本/扫描页图像）会发送到 DeepSeek；" +
-                            "开启“参考现有安排”时还会发送所选日期范围的忙碌时间摘要与候选条目标题/ID/版本。" +
-                            "默认不发送备注、地点、完整数据库或备份。费用由你的 DeepSeek 账户按实际调用结算。",
+                            "点击发送时，本次聊天文字会发送到 DeepSeek；不会发送本地日程、待办、倒数日或备份。" +
+                            "费用由你的 DeepSeek 账户按实际调用结算。",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -112,7 +122,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
             }
 
             // Key
-            Card(Modifier.fillMaxWidth()) {
+            GlassCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("DeepSeek API Key", style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -143,11 +153,19 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                         }
                         OutlinedButton(
                             onClick = {
-                                testing = true
-                                testMsg = "正在连接…"
-                                vm.testConnection { ok, msg ->
-                                    testing = false
-                                    testMsg = (if (ok) "✓ " else "✗ ") + msg
+                                val typed = keyInput.trim()
+                                if (typed.isNotBlank()) {
+                                    // 输入框里有新 Key 时先落盘，避免“测试连接”读到旧/空 Key
+                                    val (ok, msg) = vm.saveKey(typed)
+                                    keyMsg = msg
+                                    if (!ok) {
+                                        testMsg = "✗ $msg"
+                                    } else {
+                                        keyInput = ""
+                                        runConnectionTest()
+                                    }
+                                } else {
+                                    runConnectionTest()
                                 }
                             },
                             enabled = !testing && (maskedKey != null || keyInput.isNotBlank()),
@@ -172,12 +190,17 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
             }
 
             // 模型
-            Card(Modifier.fillMaxWidth()) {
+            GlassCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("模型", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "图片需要支持 image 输入的模型；纯文本模型不能接收图片。实际能力以官方 GET /models 为准。",
+                        "选择聊天使用的 DeepSeek 模型。",
                         fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "空回复会自动重试；连续为空时显示一条本地提示，不会留下空白回复。",
+                        fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     models.forEach { m ->
@@ -195,95 +218,13 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                         OutlinedButton(onClick = {
                             vm.refreshModalities()
                             testMsg = "已请求刷新模型列表（需要有效 Key）"
-                        }) { Text("刷新模型能力") }
-                    }
-                    Text(
-                        "支持图像输入的模型：${
-                            if (vm.modalitiesOf(cfg.model)?.contains("image") == true) "是" else
-                                if (vm.modalitiesOf(cfg.model) == null) "未知" else "否（发图片会提示切换）"
-                        }",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            // 保存与偏好
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("保存与规划偏好", style = MaterialTheme.typography.titleMedium)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("明确新增时自动保存", fontSize = 13.sp)
-                            Text(
-                                "仅当整批都是明确新增、时间完整、无冲突且通过本地校验时自动保存，" +
-                                    "并在聊天中显示条目与“撤销本批”。附件批次始终先预览。",
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Switch(
-                            checked = cfg.autoSave,
-                            onCheckedChange = { update(cfg.copy(autoSave = it)) },
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("参考现有安排", fontSize = 13.sp)
-                            Text(
-                                "发送未来 7 天忙碌时间摘要与近期候选条目的标题/ID/版本；本地冲突检查始终执行。",
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Switch(
-                            checked = cfg.sendExistingSummary,
-                            onCheckedChange = { update(cfg.copy(sendExistingSummary = it)) },
-                        )
-                    }
-                    OutlinedTextField(
-                        value = durationText,
-                        onValueChange = { t ->
-                            durationText = t.filter { it.isDigit() }.take(3)
-                            durationText.toIntOrNull()?.let { n ->
-                                if (n in 10..240) update(vm.config().copy(defaultDurationMinutes = n))
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("默认时长（分钟，10–240）") },
-                        singleLine = true,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = windowStart,
-                            onValueChange = { t ->
-                                windowStart = t
-                                PlanRules.normalizeTime(t)?.let { n ->
-                                    update(vm.config().copy(planWindowStart = n))
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            label = { Text("可安排开始") },
-                            singleLine = true,
-                        )
-                        OutlinedTextField(
-                            value = windowEnd,
-                            onValueChange = { t ->
-                                windowEnd = t
-                                PlanRules.normalizeTime(t)?.let { n ->
-                                    update(vm.config().copy(planWindowEnd = n))
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            label = { Text("可安排结束") },
-                            singleLine = true,
-                        )
+                        }) { Text("刷新模型列表") }
                     }
                 }
             }
 
             // 入口
-            Card(Modifier.fillMaxWidth()) {
+            GlassCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("入口显示", style = MaterialTheme.typography.titleMedium)
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -322,7 +263,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
 
             // 演示模式（仅 debug 包可用）
             if (vm.mockAvailable()) {
-                Card(Modifier.fillMaxWidth()) {
+                GlassCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("演示（Mock）模式", style = MaterialTheme.typography.titleMedium)
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -344,7 +285,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
             }
 
             // 数据与素材
-            Card(Modifier.fillMaxWidth()) {
+            GlassCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("数据与缓存", style = MaterialTheme.typography.titleMedium)
                     OutlinedButton(
@@ -360,7 +301,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
                 }
             }
 
-            Card(Modifier.fillMaxWidth()) {
+            GlassCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("第三方素材", style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -375,7 +316,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
             }
 
             Text(
-                "日序 v1.7.1 · AI 为可选功能，需自备 Key；离线功能不依赖网络",
+                "日序 v1.7.7 · AI 为可选功能，需自备 Key；离线功能不依赖网络",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

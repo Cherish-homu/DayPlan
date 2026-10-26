@@ -18,9 +18,17 @@ data class AiConfig(
     val showWhale: Boolean = true,
     /** 角色动效：system / reduced / full；默认跟随系统。 */
     val animationMode: String = "system",
+    /** 聊天模式：planner=JSON 草稿确认；plain=自然语言聊天（不写库）。 */
+    val chatMode: String = MODE_PLANNER,
     val noticeAcknowledged: Boolean = false,
 ) {
     companion object {
+        const val MODE_PLANNER = "planner"
+        const val MODE_PLAIN = "plain"
+
+        fun normalizedChatMode(raw: String?): String =
+            if (raw == MODE_PLAIN) MODE_PLAIN else MODE_PLANNER
+
         const val DEFAULT_MODEL = "deepseek-flash"
 
         /** 官方文档（2026-10-25 核对）：Flash 支持 text+image，Pro 仅 text。 */
@@ -51,6 +59,7 @@ class AiSettingsStore(context: Context) {
             planWindowEnd = prefs.getString("winEnd", "22:00") ?: "22:00",
             showWhale = prefs.getBoolean("showWhale", true),
             animationMode = prefs.getString("animationMode", "system") ?: "system",
+            chatMode = AiConfig.normalizedChatMode(prefs.getString("chatMode", null)),
             noticeAcknowledged = prefs.getBoolean("noticeAck", false),
         )
         set(value) {
@@ -64,6 +73,7 @@ class AiSettingsStore(context: Context) {
                 .putString("winEnd", value.planWindowEnd)
                 .putBoolean("showWhale", value.showWhale)
                 .putString("animationMode", value.animationMode)
+                .putString("chatMode", AiConfig.normalizedChatMode(value.chatMode))
                 .putBoolean("noticeAck", value.noticeAcknowledged)
                 .apply()
         }
@@ -92,9 +102,15 @@ class AiSettingsStore(context: Context) {
 
     // ---------- 数据世代与聊天会话 ----------
 
-    /** 备份恢复/快照回退/清空对话后递增；旧的待执行草稿与撤销随之失效。 */
+    /**
+     * 备份恢复/快照回退/清空对话后递增；旧的待执行草稿与撤销随之失效。
+     * 会话边界可能被 UI 的 reload 与发送协程同时读取，首次懒生成必须全局串行，
+     * 否则两个线程会各自生成不同 session，导致正常请求被误判为“对话已清空”。
+     */
     fun bumpDataGeneration() {
-        state.edit().putInt("dataGeneration", dataGeneration + 1).apply()
+        synchronized(boundaryLock) {
+            state.edit().putInt("dataGeneration", dataGeneration + 1).apply()
+        }
     }
 
     val dataGeneration: Int get() = state.getInt("dataGeneration", 1)
@@ -105,43 +121,58 @@ class AiSettingsStore(context: Context) {
      */
     var boundaryDirty: Boolean
         get() = state.getBoolean("boundaryDirty", false)
-        set(value) { state.edit().putBoolean("boundaryDirty", value).apply() }
+        set(value) = synchronized(boundaryLock) {
+            state.edit().putBoolean("boundaryDirty", value).apply()
+        }
 
     /** 只更新本地缓存（不改变 dirty）。 */
     fun cacheBoundary(generation: Int, sessionId: String) {
-        state.edit()
-            .putInt("dataGeneration", generation)
-            .putString("chatSession", sessionId)
-            .apply()
+        synchronized(boundaryLock) {
+            state.edit()
+                .putInt("dataGeneration", generation)
+                .putString("chatSession", sessionId)
+                .apply()
+        }
     }
 
     /** 边界已经与 DB 一致后调用。 */
     fun markBoundaryPersisted(generation: Int, sessionId: String) {
-        state.edit()
-            .putInt("dataGeneration", generation)
-            .putString("chatSession", sessionId)
-            .putBoolean("boundaryDirty", false)
-            .apply()
+        synchronized(boundaryLock) {
+            state.edit()
+                .putInt("dataGeneration", generation)
+                .putString("chatSession", sessionId)
+                .putBoolean("boundaryDirty", false)
+                .apply()
+        }
     }
 
     /** 清空对话：新会话标记为待持久化；调用方同步更新内存 gate。 */
-    fun newChatSessionDirty(generation: Int): String {
+    fun newChatSessionDirty(generation: Int): String = synchronized(boundaryLock) {
         val id = UUID.randomUUID().toString()
         state.edit()
             .putInt("dataGeneration", generation)
             .putString("chatSession", id)
             .putBoolean("boundaryDirty", true)
             .apply()
-        return id
+        id
     }
 
     /** 当前聊天会话；清空对话后更换，旧会话的晚到响应不再写库。 */
-    fun newChatSession(): String {
+    fun newChatSession(): String = synchronized(boundaryLock) { newChatSessionLocked() }
+
+    private fun newChatSessionLocked(): String {
         val id = UUID.randomUUID().toString()
         state.edit().putString("chatSession", id).apply()
         return id
     }
 
     val chatSessionId: String
-        get() = state.getString("chatSession", null) ?: newChatSession()
+        get() = synchronized(boundaryLock) {
+            state.getString("chatSession", null) ?: newChatSessionLocked()
+        }
+
+    private companion object {
+        /** 同一进程内多个 AiSettingsStore 实例也可能并发首次生成会话。 */
+        private val boundaryLock = Any()
+    }
 }

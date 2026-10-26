@@ -21,8 +21,8 @@ android {
         applicationId = "com.jsy.dayplan"
         minSdk = 26
         targetSdk = 34
-        versionCode = 10
-        versionName = "1.7.1"
+        versionCode = 16
+        versionName = "1.7.7"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -69,8 +69,8 @@ object DayPlanNotifications {
         )
     }
 
-    fun buildReminder(context: Context, fired: ReminderCoordinator.FiredInfo): Notification =
-        NotificationCompat.Builder(context, DayPlanApp.REMINDER_CHANNEL_ID)
+    fun buildReminder(context: Context, fired: ReminderCoordinator.FiredInfo): Notification {
+        val builder = NotificationCompat.Builder(context, DayPlanApp.REMINDER_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(fired.title)
             .setContentText(fired.body.ifBlank { "点按查看详情" })
@@ -78,8 +78,22 @@ object DayPlanNotifications {
             .setContentIntent(contentIntent(context, fired))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_REMINDER)
-            .build()
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        if (ReminderAlarmPrefs(context).popupEnabled) {
+            // 全屏通知：锁屏/未打开应用时由系统拉起大肥鱼提醒；不支持时仍保留普通通知。
+            val fullScreen = PendingIntent.getActivity(
+                context,
+                fired.key.hashCode() + 100_000,
+                ReminderAlarmActivity.intent(context, fired),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.setFullScreenIntent(fullScreen, true)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+        } else {
+            builder.setCategory(NotificationCompat.CATEGORY_REMINDER)
+        }
+        return builder.build()
+    }
 
     /** 可能抛 SecurityException（权限在检查后被撤销）；调用方负责释放去重标记。 */
     fun postReminder(context: Context, fired: ReminderCoordinator.FiredInfo) {

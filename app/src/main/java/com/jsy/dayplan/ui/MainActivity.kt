@@ -6,10 +6,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.core.view.WindowCompat
 import com.jsy.dayplan.vm.AiViewModel
 import com.jsy.dayplan.vm.PlanViewModel
+import com.jsy.dayplan.vm.Screen
+import com.jsy.dayplan.vm.ThemeMode
 
 class MainActivity : ComponentActivity() {
 
@@ -59,6 +64,34 @@ class MainActivity : ComponentActivity() {
         vm.handleIntent(intent)
         setContent {
             val themeMode by vm.themeMode.collectAsState()
+            val stack by vm.stack.collectAsState()
+            val dark = when (themeMode) {
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+            }
+            // 专注页是深色照片背景，系统栏也要跟着变深，避免上下出现亮色条
+            val focusScreen = stack.lastOrNull() == Screen.Focus
+            val darkBars = dark || focusScreen
+            // 状态栏/导航栏跟随马卡龙背景首尾色；专注页使用黑色边框
+            SideEffect {
+                @Suppress("DEPRECATION")
+                window.statusBarColor = when {
+                    focusScreen -> 0xFF000000.toInt()
+                    dark -> 0xFF171324.toInt()
+                    else -> 0xFFFFF4F9.toInt()
+                }
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = when {
+                    focusScreen -> 0xFF000000.toInt()
+                    dark -> 0xFF221C33.toInt()
+                    else -> 0xFFEAF7F3.toInt()
+                }
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !darkBars
+                    isAppearanceLightNavigationBars = !darkBars
+                }
+            }
             DayPlanTheme(mode = themeMode) {
                 AppRoot(vm, aiVm, themeMode)
             }

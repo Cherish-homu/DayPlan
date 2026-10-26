@@ -15,6 +15,8 @@ data class ChatEntry(
     val batchId: String? = null,
     val attachmentNames: List<String> = emptyList(),
     val usageLine: String = "",
+    /** planner=日程助手；plain=普通聊天（旧记录默认 planner）。 */
+    val mode: String = AiConfig.MODE_PLANNER,
 )
 
 /** 聊天历史持久化：files/ai/chat_history.json，上限 200 条。 */

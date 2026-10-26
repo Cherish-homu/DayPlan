@@ -3,6 +3,7 @@ package com.jsy.dayplan.ai
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * AI 规划协议（v1.3）：模型只产生候选动作，真正的写入由
@@ -25,11 +26,69 @@ object AiProtocol {
         encodeDefaults = false
     }
 
-    /** 严格解析：JSON 合法不等于业务合法，只负责结构与字段类型。 */
-    fun parseResponse(text: String): AiPlanResponse = try {
-        json.decodeFromString(AiPlanResponse.serializer(), text)
-    } catch (e: Exception) {
-        throw AiException.Protocol("模型返回内容不是合法 JSON：${e.message?.take(160)}")
+    /**
+     * 严格解析：JSON 合法不等于业务合法，只负责结构与字段类型。
+     * 兼容 markdown 代码块、JSON 前后的说明文字，以及被再次包成字符串的响应。
+     */
+    fun parseResponse(text: String): AiPlanResponse {
+        val candidate = extractJsonObject(text) ?: text.trim()
+        return try {
+            var element = json.parseToJsonElement(candidate)
+            if (element is JsonPrimitive && element.isString) {
+                element = json.parseToJsonElement(element.content)
+            }
+            json.decodeFromJsonElement(AiPlanResponse.serializer(), element)
+        } catch (e: Exception) {
+            throw AiException.Protocol("模型返回内容不是合法 JSON：${e.message?.take(160)}")
+        }
+    }
+
+    /** 从带 markdown 代码块或前后说明的文本中提取第一个完整的 JSON 对象。 */
+    fun extractJsonObject(text: String): String? {
+        val stripped = stripCodeFence(text.trim())
+        if (stripped.isBlank()) return null
+        // 响应是数组（如 [{"kind":...}]）时不截取第一个对象，避免静默丢掉其余动作
+        val firstBracket = stripped.indexOf('[')
+        val firstBrace = stripped.indexOf('{')
+        if (firstBracket >= 0 && (firstBrace < 0 || firstBracket < firstBrace)) return null
+        return firstBalancedObject(stripped)
+    }
+
+    private fun stripCodeFence(text: String): String {
+        if (!text.contains("```")) return text
+        val fenced = Regex("```(?:json)?\\s*([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+            .find(text)?.groupValues?.get(1)?.trim()
+        return fenced ?: text
+    }
+
+    private fun firstBalancedObject(text: String): String? {
+        var start = -1
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in text.indices) {
+            val c = text[i]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+            } else {
+                when (c) {
+                    '"' -> inString = true
+                    '{' -> {
+                        if (depth == 0) start = i
+                        depth++
+                    }
+                    '}' -> if (depth > 0) {
+                        depth--
+                        if (depth == 0 && start >= 0) return text.substring(start, i + 1)
+                    }
+                }
+            }
+        }
+        return null
     }
 }
 

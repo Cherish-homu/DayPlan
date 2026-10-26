@@ -444,12 +444,11 @@ fun CountdownMiniCard(
         days > 0 -> days.toString()
         else -> (-days).toString()
     }
-    Card(
+    GlassCard(
         modifier = modifier
             .width(156.dp)
             .clickable(onClick = onClick),
         shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Column(Modifier.padding(14.dp).heightIn(min = 112.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -509,12 +508,7 @@ fun EmptyHintCard(
     onAction: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
-    Card(
-        modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        ),
-    ) {
+    GlassCard(modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -629,16 +623,14 @@ fun NotFoundScreen(message: String, onBack: () -> Unit) {
 fun PageTopBar(
     title: String,
     subtitle: String? = null,
-    titleSize: TextUnit = 28.sp,
-    titleLineHeight: TextUnit = 32.sp,
+    titleSize: TextUnit = 30.sp,
+    titleLineHeight: TextUnit = 36.sp,
     subtitleStartPadding: androidx.compose.ui.unit.Dp = 16.dp,
     navigationIcon: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Column(
-        Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface),
+        Modifier.fillMaxWidth(),
     ) {
         TopAppBar(
             title = {
@@ -653,7 +645,8 @@ fun PageTopBar(
             navigationIcon = { navigationIcon?.invoke() },
             actions = actions,
             colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surface,
+                containerColor = Color.Transparent,
+                scrolledContainerColor = Color.Transparent,
             ),
         )
         if (!subtitle.isNullOrBlank()) {
