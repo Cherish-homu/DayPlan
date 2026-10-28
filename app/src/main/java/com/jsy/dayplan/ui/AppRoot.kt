@@ -45,6 +45,12 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.jsy.dayplan.ledger.vm.LedgerViewModel
+import com.jsy.dayplan.ui.ledger.LedgerEditTransferScreen
+import com.jsy.dayplan.ui.ledger.LedgerEditTxnScreen
+import com.jsy.dayplan.ui.ledger.LedgerHome
+import com.jsy.dayplan.ui.ledger.LedgerManageAccountsScreen
+import com.jsy.dayplan.ui.ledger.LedgerManageCategoriesScreen
 import com.jsy.dayplan.vm.AiViewModel
 import com.jsy.dayplan.vm.PlanViewModel
 import com.jsy.dayplan.vm.RestoreOutcome
@@ -53,7 +59,7 @@ import com.jsy.dayplan.vm.ThemeMode
 import java.time.LocalDate
 
 @Composable
-fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
+fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, ledgerVm: LedgerViewModel, themeMode: ThemeMode) {
     val stack by vm.stack.collectAsState()
     val current = stack.last()
     val context = LocalContext.current
@@ -246,7 +252,7 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
     BackHandler(enabled = stack.size > 1) { vm.pop() }
 
     val mainTab = current in setOf(
-        Screen.Today, Screen.Calendar, Screen.Countdowns, Screen.Settings,
+        Screen.Today, Screen.Calendar, Screen.Countdowns, Screen.Ledger, Screen.Settings,
     )
     val chanStatus = ChanStatusLogic.from(
         sendState,
@@ -274,12 +280,44 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
                 }
             },
         ) { pad ->
+            // 深色模式文字可读性兜底：透明 Scaffold 链上 LocalContentColor 会回落到
+            // Compose 默认黑色，这里全局强制为 onSurface（浅色=墨色、深色=亮字）。
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface,
+            ) {
             Box(Modifier.fillMaxSize().padding(pad)) {
             when (current) {
                 Screen.Today -> TodayScreen(vm)
                 Screen.Calendar -> CalendarScreen(vm)
                 Screen.Countdowns -> CountdownsScreen(vm)
                 Screen.TodoList -> TodoListScreen(vm)
+                Screen.Ledger -> LedgerHome(
+                    vm = ledgerVm,
+                    onNewTxn = { vm.push(Screen.LedgerEditTxn(-1L)) },
+                    onEditTxn = { vm.push(Screen.LedgerEditTxn(it)) },
+                    onNewTransfer = { vm.push(Screen.LedgerTransfer) },
+                    onEditTransfer = { vm.push(Screen.LedgerEditTransfer(it)) },
+                    onManageCategories = { vm.push(Screen.LedgerManageCategories) },
+                    onManageAccounts = { vm.push(Screen.LedgerManageAccounts) },
+                )
+                is Screen.LedgerEditTxn -> LedgerEditTxnScreen(
+                    vm = ledgerVm,
+                    txnId = current.id,
+                    onBack = { vm.pop() },
+                    onManageCategories = { vm.push(Screen.LedgerManageCategories) },
+                )
+                is Screen.LedgerEditTransfer -> LedgerEditTransferScreen(
+                    vm = ledgerVm,
+                    transferId = current.id,
+                    onBack = { vm.pop() },
+                )
+                Screen.LedgerTransfer -> LedgerEditTransferScreen(
+                    vm = ledgerVm,
+                    transferId = -1L,
+                    onBack = { vm.pop() },
+                )
+                Screen.LedgerManageCategories -> LedgerManageCategoriesScreen(ledgerVm) { vm.pop() }
+                Screen.LedgerManageAccounts -> LedgerManageAccountsScreen(ledgerVm) { vm.pop() }
                 Screen.Settings -> SettingsScreen(
                     vm,
                     themeMode = themeMode,
@@ -366,7 +404,7 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
                         .align(Alignment.BottomEnd)
                         .padding(
                             end = 12.dp,
-                            bottom = if (current == Screen.Countdowns) 84.dp else 8.dp,
+                            bottom = if (current == Screen.Countdowns || current == Screen.Ledger) 84.dp else 8.dp,
                         ),
                 )
             }
@@ -374,6 +412,7 @@ fun AppRoot(vm: PlanViewModel, aiVm: AiViewModel, themeMode: ThemeMode) {
         }
     }
     }
+}
 }
 
 

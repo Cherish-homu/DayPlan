@@ -408,7 +408,7 @@ fun SettingsScreen(
                 icon = Icons.Filled.Info,
                 iconTint = countdownMarkColor(),
                 title = "关于",
-                summary = "日序 v1.7.8 · 本地离线 · 无账号",
+                summary = "日序 v${appVersionName()} · 本地离线 · 无账号",
                 expanded = expanded == "about",
                 onToggle = { expanded = if (expanded == "about") null else "about" },
             ) {
@@ -428,7 +428,7 @@ fun SettingsScreen(
             }
 
             Text(
-                "日序 v1.7.8 · 数据保存在应用私有目录",
+                "日序 v${appVersionName()} · 数据保存在应用私有目录",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, bottom = 80.dp),
@@ -519,3 +519,12 @@ private fun queryAudioName(context: android.content.Context, uri: Uri): String? 
             uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null,
         )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
     }.getOrNull()
+
+/** 运行时读取 versionName，避免每版硬编码「关于」页版本串。 */
+@Composable
+private fun appVersionName(): String {
+    val ctx = LocalContext.current
+    return try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?"
+    } catch (e: Exception) { "?" }
+}

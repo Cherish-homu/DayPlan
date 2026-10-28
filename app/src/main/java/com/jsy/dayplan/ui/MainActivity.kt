@@ -11,6 +11,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.view.WindowCompat
+import com.jsy.dayplan.ledger.vm.LedgerViewModel
 import com.jsy.dayplan.vm.AiViewModel
 import com.jsy.dayplan.vm.PlanViewModel
 import com.jsy.dayplan.vm.Screen
@@ -20,6 +21,7 @@ class MainActivity : ComponentActivity() {
 
     private val vm: PlanViewModel by viewModels()
     private val aiVm: AiViewModel by viewModels()
+    private val ledgerVm: LedgerViewModel by viewModels()
 
     companion object {
         const val EXTRA_OPEN_TODAY = "open_today"
@@ -93,7 +95,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             DayPlanTheme(mode = themeMode) {
-                AppRoot(vm, aiVm, themeMode)
+                AppRoot(vm, aiVm, ledgerVm, themeMode)
             }
         }
     }

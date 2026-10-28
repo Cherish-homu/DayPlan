@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Settings
@@ -129,11 +130,12 @@ fun GlassCard(
     )
 }
 
-/** 悬浮玻璃底栏：四等分，选中项用主色浅底胶囊承托。 */
+/** 悬浮玻璃底栏：五等分，选中项用主色浅底胶囊承托；账本在第 2 位（今天与月历之间）。 */
 @Composable
 fun FloatingGlassNavBar(current: Screen, onSelect: (Screen) -> Unit) {
     val items: List<Triple<Screen, ImageVector, String>> = listOf(
         Triple(Screen.Today, Icons.Filled.Today, "今天"),
+        Triple(Screen.Ledger, Icons.Filled.AccountBalanceWallet, "账本"),
         Triple(Screen.Calendar, Icons.Filled.CalendarMonth, "月历"),
         Triple(Screen.Countdowns, Icons.Filled.Event, "倒数日"),
         Triple(Screen.Settings, Icons.Filled.Settings, "我的"),

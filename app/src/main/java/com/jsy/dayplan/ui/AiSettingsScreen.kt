@@ -30,6 +30,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -333,7 +334,7 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
             }
 
             Text(
-                "日序 v1.7.8 · AI 为可选功能，需自备 Key；离线功能不依赖网络",
+                "日序 v${appVersionName()} · AI 为可选功能，需自备 Key；离线功能不依赖网络",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -358,4 +359,13 @@ fun AiSettingsScreen(vm: AiViewModel, onBack: () -> Unit) {
     if (showLicense) {
         ChanAssetLicenseDialog { showLicense = false }
     }
+}
+
+/** 运行时读取 versionName，避免每版硬编码「关于」页版本串。 */
+@Composable
+private fun appVersionName(): String {
+    val ctx = LocalContext.current
+    return try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?"
+    } catch (e: Exception) { "?" }
 }

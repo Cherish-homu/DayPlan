@@ -7,6 +7,8 @@ import com.jsy.dayplan.core.FocusTimerLogic
 import com.jsy.dayplan.core.SystemAppClock
 import com.jsy.dayplan.data.PlanDb
 import com.jsy.dayplan.data.PlanRepository
+import com.jsy.dayplan.ledger.data.LedgerDb
+import com.jsy.dayplan.ledger.data.LedgerRepository
 import com.jsy.dayplan.reminder.AndroidReminderScheduler
 import com.jsy.dayplan.reminder.DayPlanNotifications
 import com.jsy.dayplan.reminder.FocusAlarms
@@ -31,6 +33,13 @@ class DayPlanApp : Application() {
     lateinit var clock: SystemAppClock
     lateinit var reminderStatus: ReminderStatusStore
     lateinit var ai: AiContainer
+
+    /** 账本独立库：与 PlanDb 完全分离，账本数据/备份/恢复自成体系。 */
+    val ledgerRepo: LedgerRepository by lazy {
+        LedgerRepository(LedgerDb.get(this)).also {
+            it.snapshotDir = File(filesDir, "ledger_restore_snapshots")
+        }
+    }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

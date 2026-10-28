@@ -48,6 +48,14 @@ sealed class Screen(val route: String) {
     data class EditSchedule(val id: Long, val presetDate: String?) : Screen("editSched")
     data class EditTodo(val id: Long, val presetDate: String? = null) : Screen("editTodo")
     data class EditCountdown(val id: Long, val presetDate: String? = null) : Screen("editCd")
+
+    // ---- 账本（v1.8.0 并入小账本）----
+    data object Ledger : Screen("ledger")
+    data class LedgerEditTxn(val id: Long) : Screen("ledgerEditTxn")
+    data class LedgerEditTransfer(val id: Long) : Screen("ledgerEditTransfer")
+    data object LedgerTransfer : Screen("ledgerTransfer")
+    data object LedgerManageCategories : Screen("ledgerManageCategories")
+    data object LedgerManageAccounts : Screen("ledgerManageAccounts")
 }
 
 /** 恢复结果分阶段：数据是否已替换、提醒是否已重建，界面不能混为一谈。 */
